@@ -1,6 +1,6 @@
 # EK86317A Programmer
 
-这是一个为 EK86317A 开发的桌面调试工具。通过 FT232H 走 I2C 协议，实现对 PMU / VCOM 相关寄存器的读写、校验以及 EEPROM 烧录。
+这是一个为 EK86317A/LP6281/iML8947K 开发的桌面调试工具。通过 FT232H 走 I2C 协议，实现对 PMU / VCOM 相关寄存器的读写、校验以及 EEPROM 烧录。
 
 做这个工具的初衷是傻逼 Fitpower 在 2026 年用一个 8051 单片机和一个脑子抽了有病、没 log、逻辑还恶心人的上位机，关键这傻逼上位机还写 key 去算时长，是不是有病？
 
@@ -89,7 +89,6 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindic
 
 ## 未来规划
 
-- 添加对 LP6281 和 iML8947 的支持
 - 添加更多 IIC 调试工具，例如 ch347f。不过具体还得看看其他工具对 ft232h 以外工具的支持情况
 
 ## License
