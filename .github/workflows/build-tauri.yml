@@ -6,6 +6,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build (${{ matrix.platform }})
@@ -15,22 +18,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             platform: linux-x64
+            linux: true
+            args: --features ft232h --bundles deb,appimage
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            linux: true
+            args: --features ft232h --bundles deb,appimage
           - os: windows-latest
             platform: windows-x64
+            linux: false
+            args: --features ft232h --bundles nsis
           - os: macos-latest
-            platform: macos
-
-    permissions:
-      contents: read
+            platform: macos-arm64
+            linux: false
+            args: --features ft232h --bundles app,dmg
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.linux
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
@@ -38,8 +48,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
-          cache: 'npm'
+          node-version: lts/*
+          cache: npm
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -47,15 +57,26 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: ./src-tauri -> target
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app
-        run: npm run tauri build -- --features ft232h
+      - name: Build app and optionally publish Release assets
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('EK86317A Programmer {0}', github.ref_name) || '' }}
+          releaseBody: ${{ startsWith(github.ref, 'refs/tags/v') && 'Automated build from GitHub Actions.' || '' }}
+          releaseDraft: false
+          prerelease: false
+          generateReleaseNotes: true
+          args: ${{ matrix.args }}
 
-      - name: Upload bundle artifacts
+      - name: Upload workflow artifacts for manual builds
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: ek86317a-programmer-${{ matrix.platform }}
