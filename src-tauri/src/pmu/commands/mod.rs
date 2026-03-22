@@ -10,12 +10,13 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::ek86317a::Ek86317a;
+use crate::pmu::chip::ChipModel;
+use crate::pmu::device::ChipDevice;
 use crate::error::AppError;
 
-/// Global device state managed by Tauri
+/// Global device state managed by Tauri.
 pub struct DeviceState {
-    pub device: Arc<Mutex<Option<Ek86317a>>>,
+    pub device: Arc<Mutex<Option<ChipDevice>>>,
 }
 
 impl DeviceState {
@@ -31,7 +32,7 @@ impl DeviceState {
 pub async fn with_device<T, F>(state: &State<'_, DeviceState>, op: F) -> Result<T, String>
 where
     T: Send + 'static,
-    F: FnOnce(&mut Ek86317a) -> Result<T, String> + Send + 'static,
+    F: FnOnce(&mut ChipDevice) -> Result<T, String> + Send + 'static,
 {
     let device_handle = Arc::clone(&state.device);
 
@@ -49,15 +50,16 @@ where
     .map_err(|e| format!("Device task failed: {}", e))?
 }
 
-/// Device information returned after connection
+/// Device information returned after connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub pmic_detected: bool,
-    pub vcom_detected: bool,
+    pub vcom_detected: Option<bool>,
     pub device_id: String,
+    pub chip_model: ChipModel,
 }
 
-/// Register data for frontend display
+/// Register data for frontend display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterData {
     pub address: u8,
@@ -66,7 +68,7 @@ pub struct RegisterData {
     pub voltage: Option<f64>,
 }
 
-/// Firmware preview information
+/// Firmware preview information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirmwarePreview {
     pub file_name: String,
@@ -75,7 +77,7 @@ pub struct FirmwarePreview {
     pub registers: Vec<RegisterData>,
 }
 
-/// Result of firmware programming
+/// Result of firmware programming.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgramResult {
     pub success: bool,
@@ -83,16 +85,16 @@ pub struct ProgramResult {
     pub eeprom_written: bool,
 }
 
-/// Result of firmware verification
+/// Result of firmware verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyResult {
     pub success: bool,
     pub total: usize,
     pub matched: usize,
-    pub mismatches: Vec<(u8, u8, u8)>, // (addr, expected, actual)
+    pub mismatches: Vec<(u8, u8, u8)>,
 }
 
-/// Result of verify-all (DAC + EEPROM)
+/// Result of verify-all (DAC + EEPROM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyAllResult {
     pub total: usize,
@@ -102,7 +104,7 @@ pub struct VerifyAllResult {
     pub eeprom_mismatches: Vec<(u8, u8, u8)>,
 }
 
-/// Result of batch DAC write
+/// Result of batch DAC write.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteAllDacResult {
     pub success: bool,

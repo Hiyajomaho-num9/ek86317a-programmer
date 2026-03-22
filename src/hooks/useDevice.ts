@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import type { DeviceInfo } from '../lib/tauri-commands';
+import type { ChipModel } from '../lib/chips';
 import * as cmd from '../lib/tauri-commands';
 
 export function useDevice() {
@@ -19,8 +20,12 @@ export function useDevice() {
     }
   }, []);
 
-  const connect = useCallback(async (deviceId: string, clockHz: number): Promise<DeviceInfo> => {
-    const info = await cmd.connectDevice(deviceId, clockHz);
+  const connect = useCallback(async (
+    deviceId: string,
+    clockHz: number,
+    chipModel: ChipModel,
+  ): Promise<DeviceInfo> => {
+    const info = await cmd.connectDevice(deviceId, clockHz, chipModel);
     setDeviceInfo(info);
     setConnected(true);
     return info;
@@ -34,7 +39,14 @@ export function useDevice() {
 
   const detect = useCallback(async (): Promise<DeviceInfo> => {
     const info = await cmd.detectIc();
-    setDeviceInfo(prev => prev ? { ...prev, pmic_detected: info.pmic_detected, vcom_detected: info.vcom_detected } : prev);
+    setDeviceInfo((prev) => (prev
+      ? {
+          ...prev,
+          pmic_detected: info.pmic_detected,
+          vcom_detected: info.vcom_detected,
+          chip_model: info.chip_model,
+        }
+      : info));
     return info;
   }, []);
 

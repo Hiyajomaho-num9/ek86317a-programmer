@@ -4,20 +4,20 @@ use std::path::Path;
 
 use tauri::State;
 
-use crate::ek86317a::firmware::FirmwareImage;
-use crate::ek86317a::registers;
+use crate::pmu::chip::{spec_for_model, ChipModel};
+use crate::pmu::firmware::FirmwareImage;
 
 use super::{
     DeviceState, FirmwarePreview, ProgramResult, RegisterData, VerifyAllResult, VerifyResult,
     WriteAllDacResult,
 };
 
-/// Load and preview a firmware file without programming.
 #[tauri::command]
-pub async fn load_firmware(path: String) -> Result<FirmwarePreview, String> {
-    log::info!("Loading firmware from: {}", path);
+pub async fn load_firmware(path: String, chip_model: ChipModel) -> Result<FirmwarePreview, String> {
+    log::info!("Loading firmware from: {} as {}", path, chip_model.display_name());
 
-    let fw = FirmwareImage::from_file(&path)?;
+    let fw = FirmwareImage::from_file(&path, chip_model)?;
+    let spec = spec_for_model(chip_model);
 
     let file_name = Path::new(&path)
         .file_name()
@@ -27,34 +27,33 @@ pub async fn load_firmware(path: String) -> Result<FirmwarePreview, String> {
     let all_regs = fw.get_all_registers();
     let avdd_value = all_regs
         .iter()
-        .find(|(a, _)| *a == registers::REG_AVDD)
+        .find(|(a, _)| *a == spec.avdd_reg)
         .map(|(_, v)| *v);
-    let vcom_min_value = all_regs
-        .iter()
-        .find(|(a, _)| *a == registers::REG_VCOM_MIN)
-        .map(|(_, v)| *v);
-    let vcom_max_value = all_regs
-        .iter()
-        .find(|(a, _)| *a == registers::REG_VCOM_MAX)
-        .map(|(_, v)| *v);
+    let vcom_min_value = spec.vcom_min_reg.and_then(|reg| {
+        all_regs.iter().find(|(a, _)| *a == reg).map(|(_, value)| *value)
+    });
+    let vcom_max_value = spec.vcom_max_reg.and_then(|reg| {
+        all_regs.iter().find(|(a, _)| *a == reg).map(|(_, value)| *value)
+    });
+    let mode_value = spec.mode_reg.and_then(|reg| {
+        all_regs.iter().find(|(a, _)| *a == reg).map(|(_, value)| *value)
+    });
 
     let register_data: Vec<RegisterData> = all_regs
         .iter()
-        .map(|(addr, value)| {
-            let name = registers::get_register_name(*addr).to_string();
-            let voltage = registers::decode_register_voltage(
+        .map(|(addr, value)| RegisterData {
+            address: *addr,
+            value: *value,
+            name: crate::pmu::chip::get_register_name(chip_model, *addr).to_string(),
+            voltage: crate::pmu::chip::decode_register_voltage(
+                chip_model,
                 *addr,
                 *value,
                 avdd_value,
                 vcom_min_value,
                 vcom_max_value,
-            );
-            RegisterData {
-                address: *addr,
-                value: *value,
-                name,
-                voltage,
-            }
+                mode_value,
+            ),
         })
         .collect();
 
@@ -66,7 +65,6 @@ pub async fn load_firmware(path: String) -> Result<FirmwarePreview, String> {
     })
 }
 
-/// Program firmware to device DAC registers, optionally writing to EEPROM.
 #[tauri::command]
 pub async fn program_firmware(
     state: State<'_, DeviceState>,
@@ -79,12 +77,12 @@ pub async fn program_firmware(
         write_eeprom
     );
 
-    let fw = FirmwareImage::from_file(&path)?;
-    let all_regs = fw.get_all_registers();
-
     super::with_device(&state, move |device| {
+        let fw = FirmwareImage::from_file(&path, device.chip_model())?;
+        let all_regs = fw.get_all_registers();
         let mut count = 0;
-        for (addr, value) in &all_regs {
+
+        for (addr, value) in all_regs {
             device.write_dac_register(*addr, *value)?;
             count += 1;
         }
@@ -96,12 +94,6 @@ pub async fn program_firmware(
             false
         };
 
-        log::info!(
-            "Programming complete: {} registers written, EEPROM={}",
-            count,
-            eeprom_written
-        );
-
         Ok(ProgramResult {
             success: true,
             registers_written: count,
@@ -111,7 +103,6 @@ pub async fn program_firmware(
     .await
 }
 
-/// Verify firmware against device DAC register contents.
 #[tauri::command]
 pub async fn verify_firmware(
     state: State<'_, DeviceState>,
@@ -119,13 +110,11 @@ pub async fn verify_firmware(
 ) -> Result<VerifyResult, String> {
     log::info!("Verifying firmware from: {}", path);
 
-    let fw = FirmwareImage::from_file(&path)?;
-    let total = fw.register_count;
-    let fw_bytes = fw.as_bytes().to_vec();
-
     super::with_device(&state, move |device| {
-        let mismatches = device.verify_firmware(&fw_bytes)?;
-        let matched = total - mismatches.len();
+        let fw = FirmwareImage::from_file(&path, device.chip_model())?;
+        let total = fw.register_count;
+        let mismatches = device.verify_firmware(fw.as_bytes())?;
+        let matched = total.saturating_sub(mismatches.len());
 
         Ok(VerifyResult {
             success: mismatches.is_empty(),
@@ -137,14 +126,12 @@ pub async fn verify_firmware(
     .await
 }
 
-/// Export current EEPROM contents to a binary file.
 #[tauri::command]
 pub async fn export_eeprom(state: State<'_, DeviceState>, path: String) -> Result<(), String> {
     log::info!("Exporting EEPROM to: {}", path);
 
     super::with_device(&state, move |device| {
         let eeprom_data = device.read_all_eeprom()?;
-
         let max_addr = eeprom_data
             .iter()
             .map(|(a, _)| *a as usize)
@@ -157,14 +144,11 @@ pub async fn export_eeprom(state: State<'_, DeviceState>, path: String) -> Resul
         }
 
         std::fs::write(&path, &bin).map_err(|e| format!("Failed to write file: {}", e))?;
-
-        log::info!("Exported {} bytes to {}", bin.len(), path);
         Ok(())
     })
     .await
 }
 
-/// Verify firmware against both DAC and EEPROM banks.
 #[tauri::command]
 pub async fn verify_all(
     state: State<'_, DeviceState>,
@@ -172,17 +156,15 @@ pub async fn verify_all(
 ) -> Result<VerifyAllResult, String> {
     log::info!("Verify ALL (DAC + EEPROM) from: {}", path);
 
-    let fw = FirmwareImage::from_file(&path)?;
-    let total = fw.register_count;
-    let fw_bytes = fw.as_bytes().to_vec();
-
     super::with_device(&state, move |device| {
-        let (dac_mismatches, eeprom_mismatches) = device.verify_all(&fw_bytes)?;
+        let fw = FirmwareImage::from_file(&path, device.chip_model())?;
+        let total = fw.register_count;
+        let (dac_mismatches, eeprom_mismatches) = device.verify_all(fw.as_bytes())?;
 
         Ok(VerifyAllResult {
             total,
-            dac_matched: total - dac_mismatches.len(),
-            eeprom_matched: total - eeprom_mismatches.len(),
+            dac_matched: total.saturating_sub(dac_mismatches.len()),
+            eeprom_matched: total.saturating_sub(eeprom_mismatches.len()),
             dac_mismatches,
             eeprom_mismatches,
         })
@@ -190,7 +172,6 @@ pub async fn verify_all(
     .await
 }
 
-/// Batch write DAC registers from (address, value) pairs.
 #[tauri::command]
 pub async fn write_all_dac_registers(
     state: State<'_, DeviceState>,
@@ -198,18 +179,12 @@ pub async fn write_all_dac_registers(
 ) -> Result<WriteAllDacResult, String> {
     log::info!("Batch writing {} DAC registers", entries.len());
 
-    if entries
-        .iter()
-        .any(|(addr, _)| *addr == registers::REG_CONTROL)
-    {
-        return Err("Control register 0xFF is reserved for dedicated EEPROM commands".to_string());
-    }
-
     super::with_device(&state, move |device| {
+        if entries.iter().any(|(addr, _)| *addr == device.spec().control_reg) {
+            return Err("Control register 0xFF is reserved for dedicated EEPROM commands".to_string());
+        }
+
         let count = device.write_all_dac_registers(&entries)?;
-
-        log::info!("Batch write complete: {} registers written", count);
-
         Ok(WriteAllDacResult {
             success: true,
             registers_written: count,

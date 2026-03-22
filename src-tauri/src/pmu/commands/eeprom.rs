@@ -2,11 +2,10 @@
 
 use tauri::State;
 
-use crate::ek86317a::registers::FaultFlags;
+use crate::pmu::chip::{self, FaultFlags};
 
 use super::DeviceState;
 
-/// Write all DAC registers to EEPROM.
 #[tauri::command]
 pub async fn write_all_to_eeprom(state: State<'_, DeviceState>) -> Result<(), String> {
     log::info!("Writing all DAC registers to EEPROM...");
@@ -17,28 +16,27 @@ pub async fn write_all_to_eeprom(state: State<'_, DeviceState>) -> Result<(), St
     Ok(())
 }
 
-/// Write only VCOM1_NT to EEPROM.
 #[tauri::command]
 pub async fn write_vcom1_to_eeprom(state: State<'_, DeviceState>) -> Result<(), String> {
-    log::info!("Writing VCOM1_NT to EEPROM...");
+    log::info!("Writing VCOM1 to EEPROM...");
 
     super::with_device(&state, move |device| device.write_vcom1_to_eeprom()).await?;
 
-    log::info!("VCOM1_NT EEPROM write complete");
+    log::info!("VCOM EEPROM write complete");
     Ok(())
 }
 
-/// Read fault flags from the VCOM slave.
 #[tauri::command]
 pub async fn read_fault_flags(state: State<'_, DeviceState>) -> Result<FaultFlags, String> {
     log::info!("Reading fault flags...");
 
     super::with_device(&state, move |device| {
-        let raw = device.read_fault_flags()?;
-        let flags = FaultFlags::from_raw(raw);
+        if !device.spec().supports_fault_flags {
+            return Err(format!("{} does not support separate fault flags", device.spec().display_name));
+        }
 
-        log::info!("Fault flags: raw=0x{:02X}, {:?}", raw, flags);
-        Ok(flags)
+        let raw = device.read_fault_flags()?;
+        Ok(chip::decode_fault_flags(device.chip_model(), raw))
     })
     .await
 }

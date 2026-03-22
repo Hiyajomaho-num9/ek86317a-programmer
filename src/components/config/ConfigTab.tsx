@@ -23,6 +23,7 @@ const REG_VCM_VTC      = 0x2F;
 const REG_CONFIG2      = 0x30;
 const REG_CONFIG3      = 0x31;
 const REG_DISCHARGE2   = 0x32;
+const REG_CONFIG4      = 0x46;
 
 // ============================================================================
 // Helper: bit manipulation on register value
@@ -87,6 +88,8 @@ const XON_DIS_THR_OPTIONS = generateXonDisThrOptions();
 
 function ConfigTab() {
   const ctx = useAppContext();
+  const isLp = ctx.chipModel === 'lp6281';
+  const supportsMntMode = ctx.chipCapabilities.supportsMntMode;
 
   // Helper to get register value with fallback
   const regVal = (addr: number) => ctx.getDacValue(addr) ?? 0;
@@ -367,31 +370,45 @@ function ConfigTab() {
           />
         </RegisterPanel>
 
-        {/* ============================================================
-            Panel 10: Configuration 3 (0x31)
-            ============================================================ */}
-        <RegisterPanel title="Configuration 3 (31h)" address={REG_CONFIG3}>
-          <BitField label="b7: EN_PIN_SEL (0=EN in, 1=XON out)" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 7)} onCheckChange={onBitChange(REG_CONFIG3, 7)} />
-          <BitField label="b6: VCOM1_DLY_OFF" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 6)} onCheckChange={onBitChange(REG_CONFIG3, 6)} />
-          <BitField label="b5: HAVDD_DLY_OFF" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 5)} onCheckChange={onBitChange(REG_CONFIG3, 5)} />
-          <BitField label="b4: GAM_DLY_OFF" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 4)} onCheckChange={onBitChange(REG_CONFIG3, 4)} />
-          <BitField
-            label="[b3:b0] XON_DIS_THR"
-            type="dropdown"
-            options={XON_DIS_THR_OPTIONS}
-            selectedValue={getField(regVal(REG_CONFIG3), 0, 4)}
-            onSelectChange={onFieldChange(REG_CONFIG3, 0, 4)}
-          />
-        </RegisterPanel>
+        {!isLp && (
+          <>
+            {/* ============================================================
+                Panel 10: Configuration 3 (0x31)
+                ============================================================ */}
+            <RegisterPanel title="Configuration 3 (31h)" address={REG_CONFIG3}>
+              <BitField label="b7: EN_PIN_SEL (0=EN in, 1=XON out)" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 7)} onCheckChange={onBitChange(REG_CONFIG3, 7)} />
+              <BitField label="b6: VCOM1_DLY_OFF" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 6)} onCheckChange={onBitChange(REG_CONFIG3, 6)} />
+              <BitField label="b5: HAVDD_DLY_OFF" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 5)} onCheckChange={onBitChange(REG_CONFIG3, 5)} />
+              <BitField label="b4: GAM_DLY_OFF" type="checkbox" checked={getBit(regVal(REG_CONFIG3), 4)} onCheckChange={onBitChange(REG_CONFIG3, 4)} />
+              <BitField
+                label="[b3:b0] XON_DIS_THR"
+                type="dropdown"
+                options={XON_DIS_THR_OPTIONS}
+                selectedValue={getField(regVal(REG_CONFIG3), 0, 4)}
+                onSelectChange={onFieldChange(REG_CONFIG3, 0, 4)}
+              />
+            </RegisterPanel>
 
-        {/* ============================================================
-            Panel 11: Discharge Disable Set (0x32)
-            ============================================================ */}
-        <RegisterPanel title="Discharge Disable Set (32h)" address={REG_DISCHARGE2}>
-          <BitField label="b2: VBK1_DISA (0=Enable, 1=Disable)" type="checkbox" checked={getBit(regVal(REG_DISCHARGE2), 2)} onCheckChange={onBitChange(REG_DISCHARGE2, 2)} />
-          <BitField label="b1: AVDD_DIS_DISA (0=Enable, 1=Disable)" type="checkbox" checked={getBit(regVal(REG_DISCHARGE2), 1)} onCheckChange={onBitChange(REG_DISCHARGE2, 1)} />
-          <BitField label="b0: VGH_DIS_DISA (0=Enable, 1=Disable)" type="checkbox" checked={getBit(regVal(REG_DISCHARGE2), 0)} onCheckChange={onBitChange(REG_DISCHARGE2, 0)} />
-        </RegisterPanel>
+            {/* ============================================================
+                Panel 11: Discharge Disable Set (0x32)
+                ============================================================ */}
+            <RegisterPanel title="Discharge Disable Set (32h)" address={REG_DISCHARGE2}>
+              <BitField label="b2: VBK1_DISA (0=Enable, 1=Disable)" type="checkbox" checked={getBit(regVal(REG_DISCHARGE2), 2)} onCheckChange={onBitChange(REG_DISCHARGE2, 2)} />
+              <BitField label="b1: AVDD_DIS_DISA (0=Enable, 1=Disable)" type="checkbox" checked={getBit(regVal(REG_DISCHARGE2), 1)} onCheckChange={onBitChange(REG_DISCHARGE2, 1)} />
+              <BitField label="b0: VGH_DIS_DISA (0=Enable, 1=Disable)" type="checkbox" checked={getBit(regVal(REG_DISCHARGE2), 0)} onCheckChange={onBitChange(REG_DISCHARGE2, 0)} />
+            </RegisterPanel>
+
+            {/* ============================================================
+                Panel 12: Configuration 4 / VCOM2DAC (0x46)
+                ============================================================ */}
+            <RegisterPanel title={supportsMntMode ? "Configuration 4 / MNT Mode (46h)" : "VCOM2DAC Control (46h)"} address={REG_CONFIG4}>
+              <BitField label="b0: VCOM2DAC_EN" type="checkbox" checked={getBit(regVal(REG_CONFIG4), 0)} onCheckChange={onBitChange(REG_CONFIG4, 0)} />
+              {supportsMntMode && (
+                <BitField label="b7: MNT_MODE_EN (0=TV, 1=MNT)" type="checkbox" checked={getBit(regVal(REG_CONFIG4), 7)} onCheckChange={onBitChange(REG_CONFIG4, 7)} />
+              )}
+            </RegisterPanel>
+          </>
+        )}
 
       </div>
     </div>

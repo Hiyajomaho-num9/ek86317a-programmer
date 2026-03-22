@@ -5,7 +5,7 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::ft232h::I2cBus;
+use crate::bridges::I2cBus;
 
 use super::registers::*;
 

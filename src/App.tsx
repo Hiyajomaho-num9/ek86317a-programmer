@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import Toolbar from './components/Toolbar';
 import LogPanel from './components/LogPanel';
 import VoltageTab from './components/voltage/VoltageTab';
@@ -10,22 +10,23 @@ import { useRegisters } from './hooks/useRegisters';
 import { useLog } from './hooks/useLog';
 import type { DeviceInfo } from './lib/tauri-commands';
 import type { LogEntry } from './hooks/useLog';
+import type { ChipCapabilities, ChipModel } from './lib/chips';
+import { getChipCapabilities } from './lib/chips';
 
-// ============================================================================
-// App Context — shared state for all child components
-// ============================================================================
+const LS_CHIP_MODEL = 'ek86317a_chipModel';
 
 export interface AppContextType {
-  // Device
   connected: boolean;
   deviceInfo: DeviceInfo | null;
   devices: string[];
   scanning: boolean;
+  chipModel: ChipModel;
+  chipCapabilities: ChipCapabilities;
+  setChipModel: (chipModel: ChipModel) => void;
   scan: () => Promise<string[]>;
-  connect: (deviceId: string, clockHz: number) => Promise<DeviceInfo>;
+  connect: (deviceId: string, clockHz: number, chipModel: ChipModel) => Promise<DeviceInfo>;
   disconnect: () => Promise<void>;
   detect: () => Promise<DeviceInfo>;
-  // Registers
   dacRegisters: Map<number, number>;
   eepromRegisters: Map<number, number>;
   registersLoading: boolean;
@@ -35,10 +36,10 @@ export interface AppContextType {
   writeDacRegister: (addr: number, value: number) => Promise<void>;
   setDacValue: (addr: number, value: number) => void;
   replaceDacRegisters: (registers: Iterable<[number, number]>) => void;
+  replaceEepromRegisters: (registers: Iterable<[number, number]>) => void;
   resetRegisters: () => void;
   getDacValue: (addr: number) => number | undefined;
   getAvddVoltage: () => number;
-  // Log
   logs: LogEntry[];
   addLog: (level: LogEntry['level'], message: string) => void;
   clearLogs: () => void;
@@ -46,16 +47,11 @@ export interface AppContextType {
 
 export const AppContext = createContext<AppContextType | null>(null);
 
-/** Hook to access AppContext. Must be used within AppProvider. */
 export function useAppContext(): AppContextType {
   const ctx = useContext(AppContext);
-  if (!ctx) throw new Error('useAppContext must be used within AppProvider');
+  if (ctx == null) throw new Error('useAppContext must be used within AppProvider');
   return ctx;
 }
-
-// ============================================================================
-// Tab definitions
-// ============================================================================
 
 type TabId = 'voltage' | 'gamma' | 'config' | 'fault';
 
@@ -66,28 +62,39 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'fault', label: 'Fault' },
 ];
 
-// ============================================================================
-// App Component
-// ============================================================================
+function getInitialChipModel(): ChipModel {
+  const stored = localStorage.getItem(LS_CHIP_MODEL);
+  return stored === 'iml8947k' || stored === 'lp6281' || stored === 'ek86317a'
+    ? stored
+    : 'ek86317a';
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabId>('voltage');
+  const [chipModel, setChipModel] = useState<ChipModel>(getInitialChipModel);
 
   const device = useDevice();
-  const registers = useRegisters();
+  const registers = useRegisters(chipModel);
   const log = useLog();
 
+  useEffect(() => {
+    localStorage.setItem(LS_CHIP_MODEL, chipModel);
+  }, [chipModel]);
+
+  const chipCapabilities = useMemo(() => getChipCapabilities(chipModel), [chipModel]);
+
   const contextValue: AppContextType = {
-    // Device
     connected: device.connected,
     deviceInfo: device.deviceInfo,
     devices: device.devices,
     scanning: device.scanning,
+    chipModel,
+    chipCapabilities,
+    setChipModel,
     scan: device.scan,
     connect: device.connect,
     disconnect: device.disconnect,
     detect: device.detect,
-    // Registers
     dacRegisters: registers.dacRegisters,
     eepromRegisters: registers.eepromRegisters,
     registersLoading: registers.loading,
@@ -97,10 +104,10 @@ function App() {
     writeDacRegister: registers.writeDacRegister,
     setDacValue: registers.setDacValue,
     replaceDacRegisters: registers.replaceDacRegisters,
+    replaceEepromRegisters: registers.replaceEepromRegisters,
     resetRegisters: registers.resetRegisters,
     getDacValue: registers.getDacValue,
     getAvddVoltage: registers.getAvddVoltage,
-    // Log
     logs: log.logs,
     addLog: log.addLog,
     clearLogs: log.clearLogs,
@@ -116,16 +123,15 @@ function App() {
         return <ConfigTab />;
       case 'fault':
         return <FaultTab />;
+      default:
+        return null;
     }
   };
 
   return (
     <AppContext.Provider value={contextValue}>
       <div className="flex flex-col h-screen bg-gray-900 text-gray-100">
-        {/* Top Toolbar */}
         <Toolbar />
-
-        {/* Tab Bar */}
         <div className="flex border-b border-gray-700 bg-gray-800">
           {TABS.map((tab) => (
             <button
@@ -141,11 +147,7 @@ function App() {
             </button>
           ))}
         </div>
-
-        {/* Tab Content */}
         <div className="flex-1 overflow-auto p-4">{renderTabContent()}</div>
-
-        {/* Bottom Log Panel */}
         <LogPanel />
       </div>
     </AppContext.Provider>

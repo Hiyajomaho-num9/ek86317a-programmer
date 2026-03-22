@@ -1,127 +1,130 @@
-//! I2C bus trait and implementations
+//! FT232H bridge implementations.
 //!
-//! - `I2cBus` trait: abstraction for I2C communication
-//! - `MockI2cBus`: simulates EK86317A register behavior for development
-//! - `Ft232hI2cBus`: real FT232H hardware (feature-gated)
+//! - `MockI2cBus`: development-only PMU simulator that satisfies the shared
+//!   bridge trait
+//! - `Ft232hI2cBus`: real FT232H hardware backend (feature-gated)
 
 use std::collections::HashMap;
 
-use crate::ek86317a::registers::*;
+use crate::bridges::i2c::I2cBus;
+use crate::pmu::chip::{self, ChipModel, ChipSpec};
 
 // ============================================================================
-// I2C Bus Trait
+// Mock I2C Bus
 // ============================================================================
 
-/// Generic I2C bus interface. All addresses are 7-bit.
-pub trait I2cBus: Send {
-    /// Write data to the given 7-bit slave address.
-    /// `data` contains the register address followed by value byte(s).
-    /// When `data` is empty, performs an address-only probe (START + addr_W + STOP).
-    fn write(&mut self, addr: u8, data: &[u8]) -> Result<(), String>;
-
-    /// Read `buf.len()` bytes from the given 7-bit slave address.
-    fn read(&mut self, addr: u8, buf: &mut [u8]) -> Result<(), String>;
-
-    /// Combined write-then-read transaction (repeated START).
-    /// Writes `write_data` then reads into `read_buf`.
-    fn write_read(
-        &mut self,
-        addr: u8,
-        write_data: &[u8],
-        read_buf: &mut [u8],
-    ) -> Result<(), String>;
-
-    /// Perform I2C bus recovery: 9 SCL clock pulses + STOP.
-    /// Frees the bus if a slave is holding SDA low from a previously
-    /// interrupted transaction. Default implementation is a no-op.
-    fn bus_recovery(&mut self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-// ============================================================================
-// Mock I2C Bus — simulates EK86317A registers
-// ============================================================================
-
-/// Mock I2C bus that simulates EK86317A register read/write behavior.
-/// Internally maintains separate register maps for PMIC (0x20) and VCOM (0x74) slaves,
-/// plus DAC vs EEPROM bank selection.
 pub struct MockI2cBus {
-    /// PMIC DAC registers (what the chip is currently outputting)
+    spec: &'static ChipSpec,
     pmic_dac: HashMap<u8, u8>,
-    /// PMIC EEPROM registers (non-volatile storage)
     pmic_eeprom: HashMap<u8, u8>,
-    /// VCOM slave registers
     vcom_regs: HashMap<u8, u8>,
-    /// Current read source selection: false=DAC, true=EEPROM
     read_eeprom: bool,
-    /// Tracks which slave addresses respond (for probe)
     active_slaves: Vec<u8>,
 }
 
 impl MockI2cBus {
-    /// Create a new MockI2cBus with default EK86317A register values.
-    pub fn new() -> Self {
+    pub fn new(chip_model: ChipModel) -> Self {
+        let spec = chip::spec_for_model(chip_model);
+        let defaults = chip::default_register_map(chip_model);
+
         let mut pmic_dac = HashMap::new();
         let mut pmic_eeprom = HashMap::new();
-
-        // Initialize all PMIC registers with their default values
-        for reg in PMIC_REGISTERS {
-            pmic_dac.insert(reg.address, reg.default_value);
-            pmic_eeprom.insert(reg.address, reg.default_value);
+        for (addr, value) in defaults {
+            pmic_dac.insert(addr, value);
+            pmic_eeprom.insert(addr, value);
         }
 
         let mut vcom_regs = HashMap::new();
-        vcom_regs.insert(VCOM_REG_CONTROL, 0x00u8);
-        vcom_regs.insert(VCOM_REG_VCOM1_NT, 0x00u8);
-        vcom_regs.insert(VCOM_REG_FAULT, 0x00u8); // no faults
+        if spec.has_vcom_slave {
+            if let Some(control_reg) = spec.vcom_control_reg {
+                vcom_regs.insert(control_reg, 0x00);
+            }
+            if let Some(output_reg) = spec.vcom_output_reg {
+                let default_vcom = spec
+                    .pmic_vcom_register
+                    .and_then(|reg| pmic_dac.get(&reg).copied())
+                    .unwrap_or(0x00);
+                vcom_regs.insert(output_reg, default_vcom);
+            }
+            if let Some(fault_reg) = spec.vcom_fault_reg {
+                vcom_regs.insert(fault_reg, 0x00);
+            }
+        }
+
+        let mut active_slaves = vec![spec.pmic_addr];
+        if let Some(vcom_addr) = spec.vcom_addr {
+            active_slaves.push(vcom_addr);
+        }
 
         Self {
+            spec,
             pmic_dac,
             pmic_eeprom,
             vcom_regs,
             read_eeprom: false,
-            active_slaves: vec![0x20, 0x74],
+            active_slaves,
         }
     }
 
-    /// Check if a slave address is active (for probe simulation).
     pub fn is_slave_active(&self, addr: u8) -> bool {
         self.active_slaves.contains(&addr)
     }
 
-    /// Handle PMIC control register writes (0xFF).
-    /// This simulates the bank switch and EEPROM burn commands.
     fn handle_control_write(&mut self, value: u8) {
         match value {
-            CTRL_READ_DAC => {
-                // Select DAC bank for reading
+            v if v == self.spec.ctrl_read_dac => {
                 self.read_eeprom = false;
-                log::debug!("[MockI2C] Control: selected DAC bank for reading");
             }
-            CTRL_READ_EEPROM => {
-                // Select EEPROM bank for reading
+            v if v == self.spec.ctrl_read_eeprom => {
                 self.read_eeprom = true;
-                log::debug!("[MockI2C] Control: selected EEPROM bank for reading");
             }
-            CTRL_WRITE_ALL_EEPROM => {
-                // Copy all DAC registers to EEPROM
-                for (&addr, &val) in &self.pmic_dac {
-                    if addr != REG_CONTROL {
-                        self.pmic_eeprom.insert(addr, val);
+            v if v == self.spec.ctrl_write_all_eeprom => {
+                for (&addr, &reg_value) in &self.pmic_dac {
+                    if addr != self.spec.control_reg {
+                        self.pmic_eeprom.insert(addr, reg_value);
                     }
                 }
-                log::debug!("[MockI2C] Control: wrote all DAC to EEPROM");
             }
-            CTRL_WRITE_VCOM1_EEPROM => {
-                // Copy only VCOM1_NT to EEPROM
-                if let Some(&val) = self.pmic_dac.get(&REG_VCOM1_NT) {
-                    self.pmic_eeprom.insert(REG_VCOM1_NT, val);
+            v if v == self.spec.ctrl_write_vcom_eeprom => {
+                if let Some(vcom_reg) = self.spec.pmic_vcom_register {
+                    if let Some(&reg_value) = self.pmic_dac.get(&vcom_reg) {
+                        self.pmic_eeprom.insert(vcom_reg, reg_value);
+                    }
                 }
-                log::debug!("[MockI2C] Control: wrote VCOM1_NT to EEPROM");
             }
             _ => {
-                log::warn!("[MockI2C] Unknown control command: 0x{:02X}", value);
+                log::warn!("[MockI2C] Unknown control command for {}: 0x{:02X}", self.spec.display_name, value);
+            }
+        }
+    }
+
+    fn handle_vcom_control_write(&mut self, value: u8) {
+        let Some(control_reg) = self.spec.vcom_control_reg else {
+            return;
+        };
+        self.vcom_regs.insert(control_reg, value);
+
+        if let (Some(load_bit), Some(output_reg), Some(pmic_reg)) = (
+            self.spec.vcom_load_bit,
+            self.spec.vcom_output_reg,
+            self.spec.pmic_vcom_register,
+        ) {
+            if value & (1 << load_bit) != 0 {
+                if let Some(&eeprom_value) = self.pmic_eeprom.get(&pmic_reg) {
+                    self.vcom_regs.insert(output_reg, eeprom_value);
+                }
+            }
+        }
+
+        if let (Some(write_bit), Some(output_reg), Some(pmic_reg)) = (
+            self.spec.vcom_write_bit,
+            self.spec.vcom_output_reg,
+            self.spec.pmic_vcom_register,
+        ) {
+            if value & (1 << write_bit) != 0 {
+                if let Some(&output_value) = self.vcom_regs.get(&output_reg) {
+                    self.pmic_eeprom.insert(pmic_reg, output_value);
+                }
             }
         }
     }
@@ -139,64 +142,35 @@ impl I2cBus for MockI2cBus {
 
         let reg_addr = data[0];
 
-        match addr {
-            0x20 => {
-                // PMIC slave
-                if data.len() == 1 {
-                    // Address-only write (setting read pointer) — no-op for mock
-                    return Ok(());
-                }
-                // Write one or more bytes starting from reg_addr
-                for (i, &val) in data[1..].iter().enumerate() {
-                    let target_reg = reg_addr.wrapping_add(i as u8);
-                    if target_reg == REG_CONTROL {
-                        self.handle_control_write(val);
-                    } else {
-                        self.pmic_dac.insert(target_reg, val);
-                        log::trace!(
-                            "[MockI2C] PMIC DAC write: reg 0x{:02X} = 0x{:02X}",
-                            target_reg,
-                            val
-                        );
-                    }
-                }
+        if addr == self.spec.pmic_addr {
+            if data.len() == 1 {
+                return Ok(());
             }
-            0x74 => {
-                // VCOM slave
-                if data.len() >= 2 {
-                    let val = data[1];
-                    self.vcom_regs.insert(reg_addr, val);
-                    log::trace!(
-                        "[MockI2C] VCOM write: reg 0x{:02X} = 0x{:02X}",
-                        reg_addr,
-                        val
-                    );
 
-                    // Handle special VCOM control bits
-                    if reg_addr == VCOM_REG_CONTROL {
-                        if val & 0x10 != 0 {
-                            // RESET bit — reload VCOM1_NT from EEPROM
-                            if let Some(&eeprom_val) = self.pmic_eeprom.get(&REG_VCOM1_NT) {
-                                self.vcom_regs.insert(VCOM_REG_VCOM1_NT, eeprom_val);
-                                log::debug!("[MockI2C] VCOM RESET: loaded VCOM1_NT from EEPROM");
-                            }
-                        }
-                        if val & 0x08 != 0 {
-                            // W_VCOM1_NT — write VCOM1_NT to EEPROM
-                            if let Some(&vcom_val) = self.vcom_regs.get(&VCOM_REG_VCOM1_NT) {
-                                self.pmic_eeprom.insert(REG_VCOM1_NT, vcom_val);
-                                log::debug!("[MockI2C] VCOM W_VCOM1_NT: saved to EEPROM");
-                            }
-                        }
-                    }
+            for (offset, &val) in data[1..].iter().enumerate() {
+                let target_reg = reg_addr.wrapping_add(offset as u8);
+                if target_reg == self.spec.control_reg {
+                    self.handle_control_write(val);
+                } else {
+                    self.pmic_dac.insert(target_reg, val);
                 }
             }
-            _ => {
-                return Err(format!("Unknown slave address 0x{:02X}", addr));
-            }
+            return Ok(());
         }
 
-        Ok(())
+        if self.spec.vcom_addr == Some(addr) {
+            if data.len() >= 2 {
+                let value = data[1];
+                if self.spec.vcom_control_reg == Some(reg_addr) {
+                    self.handle_vcom_control_write(value);
+                } else {
+                    self.vcom_regs.insert(reg_addr, value);
+                }
+            }
+            return Ok(());
+        }
+
+        Err(format!("Unknown slave address 0x{:02X}", addr))
     }
 
     fn read(&mut self, addr: u8, buf: &mut [u8]) -> Result<(), String> {
@@ -204,7 +178,6 @@ impl I2cBus for MockI2cBus {
             return Err(format!("No ACK from slave 0x{:02X}", addr));
         }
 
-        // For simplicity, read returns 0x00 for unknown registers
         for byte in buf.iter_mut() {
             *byte = 0x00;
         }
@@ -227,43 +200,28 @@ impl I2cBus for MockI2cBus {
 
         let reg_addr = write_data[0];
 
-        match addr {
-            0x20 => {
-                // PMIC slave — read from selected bank
-                let source = if self.read_eeprom {
-                    &self.pmic_eeprom
-                } else {
-                    &self.pmic_dac
-                };
-                for (i, byte) in read_buf.iter_mut().enumerate() {
-                    let target_reg = reg_addr.wrapping_add(i as u8);
-                    *byte = source.get(&target_reg).copied().unwrap_or(0x00);
-                    log::trace!(
-                        "[MockI2C] PMIC read ({}): reg 0x{:02X} = 0x{:02X}",
-                        if self.read_eeprom { "EEPROM" } else { "DAC" },
-                        target_reg,
-                        *byte
-                    );
-                }
+        if addr == self.spec.pmic_addr {
+            let source = if self.read_eeprom {
+                &self.pmic_eeprom
+            } else {
+                &self.pmic_dac
+            };
+            for (offset, byte) in read_buf.iter_mut().enumerate() {
+                let target_reg = reg_addr.wrapping_add(offset as u8);
+                *byte = source.get(&target_reg).copied().unwrap_or(0x00);
             }
-            0x74 => {
-                // VCOM slave
-                for (i, byte) in read_buf.iter_mut().enumerate() {
-                    let target_reg = reg_addr.wrapping_add(i as u8);
-                    *byte = self.vcom_regs.get(&target_reg).copied().unwrap_or(0x00);
-                    log::trace!(
-                        "[MockI2C] VCOM read: reg 0x{:02X} = 0x{:02X}",
-                        target_reg,
-                        *byte
-                    );
-                }
-            }
-            _ => {
-                return Err(format!("Unknown slave address 0x{:02X}", addr));
-            }
+            return Ok(());
         }
 
-        Ok(())
+        if self.spec.vcom_addr == Some(addr) {
+            for (offset, byte) in read_buf.iter_mut().enumerate() {
+                let target_reg = reg_addr.wrapping_add(offset as u8);
+                *byte = self.vcom_regs.get(&target_reg).copied().unwrap_or(0x00);
+            }
+            return Ok(());
+        }
+
+        Err(format!("Unknown slave address 0x{:02X}", addr))
     }
 }
 
