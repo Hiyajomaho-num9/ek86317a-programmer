@@ -24,13 +24,14 @@
 ├── src/                # 前端代码
 │   ├── components/     # UI 组件
 │   ├── hooks/          # 设备/寄存器状态逻辑
-│   └── lib/            # 寄存器映射与 Tauri 命令封装
+│   └── lib/            # 芯片模型、寄存器映射与 Tauri 命令封装
 ├── src-tauri/          # Rust 后端
-│   ├── src/commands/   # Tauri API 路由
-│   ├── src/ek86317a/   # 协议实现、寄存器定义、固件解析
-│   └── src/ft232h/     # I2C 抽象层、FT232H 驱动实现
+│   ├── src/bridges/    # 桥接器抽象与 FT232H/CH347F 实现
+│   ├── src/pmu/        # PMU 芯片族、公用协议、命令入口
+│   └── vendor/ch347/   # CH347 官方 Windows/Linux SDK 库
 ├── package.json
 └── vite.config.ts
+
 ```
 
 ## 开发环境
@@ -39,6 +40,7 @@
 - Rust: Stable
 - Tauri 2 依赖: 参考 Tauri 官方文档配置环境
 - FTDI 驱动: 已加入静态编译 dll
+- CH347 驱动：CH347 官方 Windows/Linux SDK 库
 
 ## 开始编译
 
@@ -74,6 +76,7 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindic
 
 ## 使用方法
 
+- 选择芯片
 - **Scan & Connect**: 点击 `Scan`，扫到 FT232H 后连接
 - **Detect**: 确认 I2C 链路上 PMIC 芯片是否正常在线
 - **Read DAC / Read EEPROM**: 将 DAC / EEPROM 数据同步到 UI
@@ -89,7 +92,7 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindic
 
 ## 未来规划
 
-- 添加更多 IIC 调试工具，例如 ch347f。不过具体还得看看其他工具对 ft232h 以外工具的支持情况
+- 添加更多 IIC 调试工具，例如ft2232h和cha341a。不过具体还得看看其他工具对 ft232h 以外工具的支持情况
 
 ## License
 
