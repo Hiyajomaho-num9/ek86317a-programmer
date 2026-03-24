@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::error::AppError;
 use crate::pmu::chip::ChipModel;
 use crate::pmu::device::ChipDevice;
-use crate::error::AppError;
 
 /// Global device state managed by Tauri.
 pub struct DeviceState {

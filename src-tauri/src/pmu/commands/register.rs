@@ -145,7 +145,9 @@ pub async fn write_dac_register(
 
     super::with_device(&state, move |device| {
         if addr == device.spec().control_reg {
-            return Err("Control register 0xFF is reserved for dedicated EEPROM commands".to_string());
+            return Err(
+                "Control register 0xFF is reserved for dedicated EEPROM commands".to_string(),
+            );
         }
         device.write_dac_register(addr, value)
     })

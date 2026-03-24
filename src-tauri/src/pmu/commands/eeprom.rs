@@ -32,7 +32,10 @@ pub async fn read_fault_flags(state: State<'_, DeviceState>) -> Result<FaultFlag
 
     super::with_device(&state, move |device| {
         if !device.spec().supports_fault_flags {
-            return Err(format!("{} does not support separate fault flags", device.spec().display_name));
+            return Err(format!(
+                "{} does not support separate fault flags",
+                device.spec().display_name
+            ));
         }
 
         let raw = device.read_fault_flags()?;

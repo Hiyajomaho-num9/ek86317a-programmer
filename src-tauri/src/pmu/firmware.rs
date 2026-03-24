@@ -25,8 +25,8 @@ impl FirmwareImage {
             );
         }
 
-        let data = std::fs::read(path)
-            .map_err(|e| format!("Failed to read firmware file: {}", e))?;
+        let data =
+            std::fs::read(path).map_err(|e| format!("Failed to read firmware file: {}", e))?;
         Self::from_bytes(data, chip_model)
     }
 

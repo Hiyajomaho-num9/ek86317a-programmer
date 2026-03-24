@@ -93,7 +93,11 @@ impl MockI2cBus {
                 }
             }
             _ => {
-                log::warn!("[MockI2C] Unknown control command for {}: 0x{:02X}", self.spec.display_name, value);
+                log::warn!(
+                    "[MockI2C] Unknown control command for {}: 0x{:02X}",
+                    self.spec.display_name,
+                    value
+                );
             }
         }
     }

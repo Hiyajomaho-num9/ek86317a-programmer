@@ -24,7 +24,7 @@ function formatDeviceLabel(deviceId: string): string {
     return 'Mock device bridge (development)';
   }
 
-  if (deviceId.startsWith('bridge:ft232h:')) {
+  if (deviceId.startsWith('bridge:')) {
     const parts = deviceId.split(':');
     const index = parts[2] ?? '?';
     const desc = parts.slice(3).join(':');
@@ -340,9 +340,7 @@ function Toolbar() {
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
-      </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-gray-400 font-medium">Devices:</span>
         <select
           className={`${selectStyle} min-w-[180px]`}
@@ -376,24 +374,24 @@ function Toolbar() {
         ) : (
           <button onClick={handleConnect} className={btnGreen} disabled={selectedDevice === '' || toolbarBusy}>Connect</button>
         )}
+      </div>
 
-        <div className="flex items-center gap-2 ml-2 flex-wrap">
-          <span className="text-xs text-gray-400">Status:</span>
-          <span className={`inline-block w-2 h-2 rounded-full ${ctx.connected ? 'bg-green-500' : 'bg-red-500'}`} />
-          <span className={`text-xs ${ctx.connected ? 'text-green-400' : 'text-gray-500'}`}>
-            {ctx.connected ? 'Connected' : 'Disconnected'}
-          </span>
-          {ctx.deviceInfo && (
-            <>
-              <span className="text-gray-600">|</span>
-              <span className="text-xs text-gray-400">Chip: <span className="text-blue-300">{getChipDisplayName(ctx.deviceInfo.chip_model)}</span></span>
-              <span className="text-xs text-gray-400">PMIC: <span className={ctx.deviceInfo.pmic_detected ? 'text-green-400' : 'text-red-400'}>{ctx.deviceInfo.pmic_detected ? '0x20' : 'missing'}</span></span>
-              <span className="text-xs text-gray-400">VCOM: <span className={ctx.deviceInfo.vcom_detected == null ? 'text-gray-400' : ctx.deviceInfo.vcom_detected ? 'text-green-400' : 'text-red-400'}>{formatDetectStatus(ctx.deviceInfo.vcom_detected, '0x74')}</span></span>
-            </>
-          )}
-          <button onClick={handleDetect} className={btnCyan} disabled={ctx.connected !== true || toolbarBusy}>Detect</button>
-          {busyAction && <span className="text-xs text-amber-300">{busyAction}</span>}
-        </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-gray-400">Status:</span>
+        <span className={`inline-block w-2 h-2 rounded-full ${ctx.connected ? 'bg-green-500' : 'bg-red-500'}`} />
+        <span className={`text-xs ${ctx.connected ? 'text-green-400' : 'text-gray-500'}`}>
+          {ctx.connected ? 'Connected' : 'Disconnected'}
+        </span>
+        {ctx.deviceInfo && (
+          <>
+            <span className="text-gray-600">|</span>
+            <span className="text-xs text-gray-400">Chip: <span className="text-blue-300">{getChipDisplayName(ctx.deviceInfo.chip_model)}</span></span>
+            <span className="text-xs text-gray-400">PMIC: <span className={ctx.deviceInfo.pmic_detected ? 'text-green-400' : 'text-red-400'}>{ctx.deviceInfo.pmic_detected ? '0x20' : 'missing'}</span></span>
+            <span className="text-xs text-gray-400">VCOM: <span className={ctx.deviceInfo.vcom_detected == null ? 'text-gray-400' : ctx.deviceInfo.vcom_detected ? 'text-green-400' : 'text-red-400'}>{formatDetectStatus(ctx.deviceInfo.vcom_detected, '0x74')}</span></span>
+          </>
+        )}
+        <button onClick={handleDetect} className={btnCyan} disabled={ctx.connected !== true || toolbarBusy}>Detect</button>
+        {busyAction && <span className="text-xs text-amber-300">{busyAction}</span>}
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">

@@ -14,7 +14,11 @@ use super::{
 
 #[tauri::command]
 pub async fn load_firmware(path: String, chip_model: ChipModel) -> Result<FirmwarePreview, String> {
-    log::info!("Loading firmware from: {} as {}", path, chip_model.display_name());
+    log::info!(
+        "Loading firmware from: {} as {}",
+        path,
+        chip_model.display_name()
+    );
 
     let fw = FirmwareImage::from_file(&path, chip_model)?;
     let spec = spec_for_model(chip_model);
@@ -30,13 +34,22 @@ pub async fn load_firmware(path: String, chip_model: ChipModel) -> Result<Firmwa
         .find(|(a, _)| *a == spec.avdd_reg)
         .map(|(_, v)| *v);
     let vcom_min_value = spec.vcom_min_reg.and_then(|reg| {
-        all_regs.iter().find(|(a, _)| *a == reg).map(|(_, value)| *value)
+        all_regs
+            .iter()
+            .find(|(a, _)| *a == reg)
+            .map(|(_, value)| *value)
     });
     let vcom_max_value = spec.vcom_max_reg.and_then(|reg| {
-        all_regs.iter().find(|(a, _)| *a == reg).map(|(_, value)| *value)
+        all_regs
+            .iter()
+            .find(|(a, _)| *a == reg)
+            .map(|(_, value)| *value)
     });
     let mode_value = spec.mode_reg.and_then(|reg| {
-        all_regs.iter().find(|(a, _)| *a == reg).map(|(_, value)| *value)
+        all_regs
+            .iter()
+            .find(|(a, _)| *a == reg)
+            .map(|(_, value)| *value)
     });
 
     let register_data: Vec<RegisterData> = all_regs
@@ -180,8 +193,13 @@ pub async fn write_all_dac_registers(
     log::info!("Batch writing {} DAC registers", entries.len());
 
     super::with_device(&state, move |device| {
-        if entries.iter().any(|(addr, _)| *addr == device.spec().control_reg) {
-            return Err("Control register 0xFF is reserved for dedicated EEPROM commands".to_string());
+        if entries
+            .iter()
+            .any(|(addr, _)| *addr == device.spec().control_reg)
+        {
+            return Err(
+                "Control register 0xFF is reserved for dedicated EEPROM commands".to_string(),
+            );
         }
 
         let count = device.write_all_dac_registers(&entries)?;

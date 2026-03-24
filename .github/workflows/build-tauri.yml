@@ -21,19 +21,19 @@ jobs:
           - os: ubuntu-24.04
             platform: linux-x64
             linux: true
-            args: --features ft232h --bundles deb
+            args: --features all-bridges --bundles deb
           - os: ubuntu-24.04-arm
             platform: linux-arm64
             linux: true
-            args: --features ft232h --bundles deb
+            args: --features all-bridges --bundles deb
           - os: windows-latest
             platform: windows-x64
             linux: false
-            args: --features ft232h --bundles nsis
+            args: --features all-bridges --bundles nsis
           - os: macos-latest
             platform: macos-arm64
             linux: false
-            args: --features ft232h --bundles app,dmg
+            args: --features all-bridges --bundles app,dmg
 
     steps:
       - name: Checkout

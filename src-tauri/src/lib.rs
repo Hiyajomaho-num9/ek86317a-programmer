@@ -1,7 +1,7 @@
 #![allow(unused)]
 
-pub mod error;
 pub mod bridges;
+pub mod error;
 pub mod pmu;
 
 use pmu::commands::DeviceState;

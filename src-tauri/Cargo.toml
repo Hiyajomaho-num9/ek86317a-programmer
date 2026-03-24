@@ -27,3 +27,8 @@ libftd2xx = { version = "0.32", features = ["static"], optional = true }
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 ft232h = ["libftd2xx"]
+ch347f = []
+all-bridges = ["ft232h", "ch347f"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+libloading = "0.8"

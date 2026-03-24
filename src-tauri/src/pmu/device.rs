@@ -1,8 +1,8 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::pmu::chip::{self, ChipModel, ChipSpec};
 use crate::bridges::I2cBus;
+use crate::pmu::chip::{self, ChipModel, ChipSpec};
 
 pub struct ChipDevice {
     bus: Box<dyn I2cBus>,
@@ -82,7 +82,8 @@ impl ChipDevice {
                 continue;
             }
             let mut buf = [0u8; 1];
-            self.bus.write_read(self.spec.pmic_addr, &[addr], &mut buf)?;
+            self.bus
+                .write_read(self.spec.pmic_addr, &[addr], &mut buf)?;
             results.push((addr, buf[0]));
         }
         Ok(results)
@@ -113,7 +114,8 @@ impl ChipDevice {
                 continue;
             }
             let mut buf = [0u8; 1];
-            self.bus.write_read(self.spec.pmic_addr, &[addr], &mut buf)?;
+            self.bus
+                .write_read(self.spec.pmic_addr, &[addr], &mut buf)?;
             results.push((addr, buf[0]));
         }
         Ok(results)
@@ -138,10 +140,12 @@ impl ChipDevice {
     }
 
     pub fn read_fault_flags(&mut self) -> Result<u8, String> {
-        let vcom_addr = self
-            .spec
-            .vcom_addr
-            .ok_or_else(|| format!("{} does not expose a separate VCOM slave", self.spec.display_name))?;
+        let vcom_addr = self.spec.vcom_addr.ok_or_else(|| {
+            format!(
+                "{} does not expose a separate VCOM slave",
+                self.spec.display_name
+            )
+        })?;
         let fault_reg = self
             .spec
             .vcom_fault_reg
@@ -215,7 +219,10 @@ impl ChipDevice {
         }
 
         let pmic_ok = self.bus.write(self.spec.pmic_addr, &[]).is_ok();
-        let vcom_ok = self.spec.vcom_addr.map(|addr| self.bus.write(addr, &[]).is_ok());
+        let vcom_ok = self
+            .spec
+            .vcom_addr
+            .map(|addr| self.bus.write(addr, &[]).is_ok());
 
         Ok((pmic_ok, vcom_ok))
     }
