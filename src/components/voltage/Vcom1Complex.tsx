@@ -3,12 +3,13 @@ import { useAppContext } from '../../App';
 import {
   REG_VCOM_MAX,
   REG_VCOM_MIN,
-  generateVcomLimitOptions,
+  generateVcomMaxLimitOptions,
+  generateVcomMinLimitOptions,
   getDefaultRegisterValue,
   getPrimaryVcomAddress,
   getPrimaryVcomName,
 } from '../../lib/register-map';
-import { decodeVcom1Nt, decodeVcomLimit, formatHex, formatVoltage } from '../../lib/voltage-calc';
+import { decodeVcom1Nt, decodeVcomMaxLimit, decodeVcomMinLimit, formatHex, formatVoltage } from '../../lib/voltage-calc';
 
 function Vcom1Complex() {
   const ctx = useAppContext();
@@ -20,12 +21,13 @@ function Vcom1Complex() {
   const vcomMaxRaw = ctx.getDacValue(REG_VCOM_MAX) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MAX);
   const primaryRaw = ctx.getDacValue(primaryAddr) ?? getDefaultRegisterValue(ctx.chipModel, primaryAddr);
 
-  const vcomMinV = decodeVcomLimit(vcomMinRaw, avdd);
-  const vcomMaxV = decodeVcomLimit(vcomMaxRaw, avdd);
+  const vcomMinV = decodeVcomMinLimit(vcomMinRaw, avdd);
+  const vcomMaxV = decodeVcomMaxLimit(vcomMaxRaw, avdd);
   const primaryV = decodeVcom1Nt(primaryRaw, vcomMinV, vcomMaxV);
   const dacCode = (primaryRaw >> 1) & 0x7f;
 
-  const vcomLimitOptions = useMemo(() => generateVcomLimitOptions(avdd), [avdd]);
+  const vcomMinLimitOptions = useMemo(() => generateVcomMinLimitOptions(avdd), [avdd]);
+  const vcomMaxLimitOptions = useMemo(() => generateVcomMaxLimitOptions(avdd), [avdd]);
 
   const handleSliderChange = (newDacCode: number) => {
     ctx.setDacValue(primaryAddr, (newDacCode & 0x7f) << 1);
@@ -89,7 +91,7 @@ function Vcom1Complex() {
             value={vcomMinRaw}
             onChange={(event) => ctx.setDacValue(REG_VCOM_MIN, Number(event.target.value))}
           >
-            {vcomLimitOptions.map((option) => (
+            {vcomMinLimitOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {formatHex(option.value)} = {option.label}
               </option>
@@ -106,7 +108,7 @@ function Vcom1Complex() {
             value={vcomMaxRaw}
             onChange={(event) => ctx.setDacValue(REG_VCOM_MAX, Number(event.target.value))}
           >
-            {vcomLimitOptions.map((option) => (
+            {vcomMaxLimitOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {formatHex(option.value)} = {option.label}
               </option>

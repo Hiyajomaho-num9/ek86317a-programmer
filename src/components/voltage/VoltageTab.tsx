@@ -13,7 +13,7 @@ import {
   getVoltageRegisters,
 } from '../../lib/register-map';
 import type { VoltageOption, VoltageRegisterDef } from '../../lib/register-map';
-import { decodeVcomLimit } from '../../lib/voltage-calc';
+import { decodeVcomMaxLimit, decodeVcomMinLimit } from '../../lib/voltage-calc';
 
 function VoltageTab() {
   const ctx = useAppContext();
@@ -25,8 +25,8 @@ function VoltageTab() {
 
   const vcomMinRaw = ctx.getDacValue(REG_VCOM_MIN) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MIN);
   const vcomMaxRaw = ctx.getDacValue(REG_VCOM_MAX) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MAX);
-  const vcomMinV = decodeVcomLimit(vcomMinRaw, avdd);
-  const vcomMaxV = decodeVcomLimit(vcomMaxRaw, avdd);
+  const vcomMinV = decodeVcomMinLimit(vcomMinRaw, avdd);
+  const vcomMaxV = decodeVcomMaxLimit(vcomMaxRaw, avdd);
 
   const havddOptions = useMemo(() => generateHavddOptions(avdd), [avdd]);
   const vcom2dacOptions = useMemo(

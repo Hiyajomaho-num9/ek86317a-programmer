@@ -30,7 +30,7 @@ pub const REG_VSS1: u8 = 0x07;
 pub const REG_VCOM1_NT: u8 = 0x08;
 /// VCOM1 high temperature, 7-bit [7:1]
 pub const REG_VCOM1_HT: u8 = 0x09;
-/// VCOM upper limit, 7-bit [6:0], VCOM_MAX = AVDD × DAC_CODE / 128
+/// VCOM upper limit, 7-bit [6:0], VCOM_MAX = AVDD × (DAC_CODE + 1) / 128
 pub const REG_VCOM_MAX: u8 = 0x0A;
 /// VCOM lower limit, 7-bit [6:0], VCOM_MIN = AVDD × DAC_CODE / 128
 pub const REG_VCOM_MIN: u8 = 0x0B;
@@ -267,7 +267,7 @@ pub static PMIC_REGISTERS: &[RegisterDef] = &[
     RegisterDef {
         address: REG_VCOM_MAX,
         name: "VCOM_MAX",
-        description: "VCOM upper limit = AVDD × DAC / 128",
+        description: "VCOM upper limit = AVDD × (DAC + 1) / 128",
         default_value: DEFAULT_REG_VCOM_MAX_VALUE,
         bit_width: 7,
         writable: true,
@@ -777,22 +777,50 @@ pub fn encode_vcom(voltage: f64, avdd: f64) -> Option<u8> {
     Some(code << 1)
 }
 
-/// Decode VCOM limit register value to voltage (VCOM_MAX, VCOM_MIN).
-/// Formula: VCOM_LIMIT = AVDD × (value & 0x7F) / 128
-pub fn decode_vcom_limit(value: u8, avdd: f64) -> f64 {
+/// Decode VCOM_MIN register value to voltage.
+/// Formula: VCOM_MIN = AVDD × (value & 0x7F) / 128
+pub fn decode_vcom_min_limit(value: u8, avdd: f64) -> f64 {
     avdd * (value & 0x7F) as f64 / 128.0
 }
 
-/// Encode VCOM limit voltage to register value.
-pub fn encode_vcom_limit(voltage: f64, avdd: f64) -> Option<u8> {
+/// Decode VCOM_MAX register value to voltage.
+/// Formula: VCOM_MAX = AVDD × ((value & 0x7F) + 1) / 128
+pub fn decode_vcom_max_limit(value: u8, avdd: f64) -> f64 {
+    avdd * ((value & 0x7F) as f64 + 1.0) / 128.0
+}
+
+/// Decode a VCOM_MIN-compatible limit register value to voltage.
+pub fn decode_vcom_limit(value: u8, avdd: f64) -> f64 {
+    decode_vcom_min_limit(value, avdd)
+}
+
+/// Encode VCOM_MIN voltage to register value.
+pub fn encode_vcom_min_limit(voltage: f64, avdd: f64) -> Option<u8> {
     if avdd <= 0.0 {
         return None;
     }
-    let code = (voltage * 128.0 / avdd).round() as u8;
-    if code > 0x7F {
+    let code = (voltage * 128.0 / avdd).round();
+    if !(0.0..=0x7F as f64).contains(&code) {
         return None;
     }
-    Some(code)
+    Some(code as u8)
+}
+
+/// Encode VCOM_MAX voltage to register value.
+pub fn encode_vcom_max_limit(voltage: f64, avdd: f64) -> Option<u8> {
+    if avdd <= 0.0 {
+        return None;
+    }
+    let code = (voltage * 128.0 / avdd - 1.0).round();
+    if !(0.0..=0x7F as f64).contains(&code) {
+        return None;
+    }
+    Some(code as u8)
+}
+
+/// Encode a VCOM_MIN-compatible limit voltage to register value.
+pub fn encode_vcom_limit(voltage: f64, avdd: f64) -> Option<u8> {
+    encode_vcom_min_limit(voltage, avdd)
 }
 
 fn normalized_vcom_range(vcom_min: f64, vcom_max: f64) -> (f64, f64) {
@@ -892,8 +920,10 @@ pub fn decode_register_voltage(
     vcom_max_value: Option<u8>,
 ) -> Option<f64> {
     let avdd = decode_avdd(avdd_value.unwrap_or(DEFAULT_REG_AVDD_VALUE));
-    let vcom_min = decode_vcom_limit(vcom_min_value.unwrap_or(DEFAULT_REG_VCOM_MIN_VALUE), avdd);
-    let vcom_max = decode_vcom_limit(vcom_max_value.unwrap_or(DEFAULT_REG_VCOM_MAX_VALUE), avdd);
+    let vcom_min =
+        decode_vcom_min_limit(vcom_min_value.unwrap_or(DEFAULT_REG_VCOM_MIN_VALUE), avdd);
+    let vcom_max =
+        decode_vcom_max_limit(vcom_max_value.unwrap_or(DEFAULT_REG_VCOM_MAX_VALUE), avdd);
 
     match addr {
         REG_AVDD => Some(decode_avdd(value)),
@@ -906,8 +936,8 @@ pub fn decode_register_voltage(
         REG_VSS1 => Some(decode_vss1(value)),
         REG_VCOM1_NT => Some(decode_vcom_output(value, vcom_min, vcom_max)),
         REG_VCOM1_HT => Some(decode_vcom_output(value, vcom_min, vcom_max)),
-        REG_VCOM_MAX => Some(decode_vcom_limit(value, avdd)),
-        REG_VCOM_MIN => Some(decode_vcom_limit(value, avdd)),
+        REG_VCOM_MAX => Some(decode_vcom_max_limit(value, avdd)),
+        REG_VCOM_MIN => Some(decode_vcom_min_limit(value, avdd)),
         REG_VCOM2DAC => Some(decode_vcom2dac(value, vcom_min, vcom_max)),
         // Gamma registers: need pair, handled separately
         _ => None,
@@ -1018,13 +1048,30 @@ mod tests {
     #[test]
     fn test_vcom_output_uses_vcom_limits() {
         let avdd = decode_avdd(DEFAULT_REG_AVDD_VALUE);
-        let vcom_min = decode_vcom_limit(DEFAULT_REG_VCOM_MIN_VALUE, avdd);
-        let vcom_max = decode_vcom_limit(DEFAULT_REG_VCOM_MAX_VALUE, avdd);
+        let vcom_min = decode_vcom_min_limit(DEFAULT_REG_VCOM_MIN_VALUE, avdd);
+        let vcom_max = decode_vcom_max_limit(DEFAULT_REG_VCOM_MAX_VALUE, avdd);
         let decoded = decode_vcom_output(DEFAULT_REG_VCOM1_NT_VALUE, vcom_min, vcom_max);
         let expected = vcom_min + (vcom_max - vcom_min) * 63.0 / 127.0;
 
         assert!((decoded - expected).abs() < 0.001);
         assert!(decoded >= vcom_min);
         assert!(decoded <= vcom_max);
+    }
+
+    #[test]
+    fn test_vcom_max_limit_uses_next_code() {
+        let avdd = decode_avdd(DEFAULT_REG_AVDD_VALUE);
+
+        let decoded_min =
+            decode_register_voltage(REG_VCOM_MIN, 0x3F, Some(DEFAULT_REG_AVDD_VALUE), None, None)
+                .unwrap();
+        let decoded_max =
+            decode_register_voltage(REG_VCOM_MAX, 0x3F, Some(DEFAULT_REG_AVDD_VALUE), None, None)
+                .unwrap();
+
+        assert!((decoded_min - avdd * 63.0 / 128.0).abs() < 0.001);
+        assert!((decoded_max - avdd * 64.0 / 128.0).abs() < 0.001);
+        assert_eq!(encode_vcom_min_limit(avdd * 63.0 / 128.0, avdd), Some(0x3F));
+        assert_eq!(encode_vcom_max_limit(avdd * 64.0 / 128.0, avdd), Some(0x3F));
     }
 }

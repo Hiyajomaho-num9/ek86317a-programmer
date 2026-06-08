@@ -7,7 +7,8 @@ import {
   decodeVgl,
   decodeVss1,
   decodeHavdd,
-  decodeVcomLimit,
+  decodeVcomMaxLimit,
+  decodeVcomMinLimit,
   decodeVcom2dac,
   formatVoltage,
   formatVoltage1,
@@ -173,10 +174,19 @@ export function generateVss1Options(): VoltageOption[] {
   return options;
 }
 
-export function generateVcomLimitOptions(avdd: number): VoltageOption[] {
+export function generateVcomMinLimitOptions(avdd: number): VoltageOption[] {
   const options: VoltageOption[] = [];
   for (let code = 0; code <= 0x7f; code += 1) {
-    const voltage = decodeVcomLimit(code, avdd);
+    const voltage = decodeVcomMinLimit(code, avdd);
+    options.push({ value: code, voltage, label: formatVoltage(voltage) });
+  }
+  return options;
+}
+
+export function generateVcomMaxLimitOptions(avdd: number): VoltageOption[] {
+  const options: VoltageOption[] = [];
+  for (let code = 0; code <= 0x7f; code += 1) {
+    const voltage = decodeVcomMaxLimit(code, avdd);
     options.push({ value: code, voltage, label: formatVoltage(voltage) });
   }
   return options;

@@ -78,14 +78,32 @@ export function encodeHavdd(voltage: number, avdd: number): number | null {
   return code >= 0 && code <= 0x7f ? code : null;
 }
 
-export function decodeVcomLimit(value: number, avdd: number): number {
+export function decodeVcomMinLimit(value: number, avdd: number): number {
   return avdd * (value & 0x7f) / 128.0;
 }
 
-export function encodeVcomLimit(voltage: number, avdd: number): number | null {
+export function decodeVcomMaxLimit(value: number, avdd: number): number {
+  return avdd * ((value & 0x7f) + 1) / 128.0;
+}
+
+export function decodeVcomLimit(value: number, avdd: number): number {
+  return decodeVcomMinLimit(value, avdd);
+}
+
+export function encodeVcomMinLimit(voltage: number, avdd: number): number | null {
   if (avdd <= 0) return null;
   const code = Math.round(voltage * 128.0 / avdd);
   return code >= 0 && code <= 0x7f ? code : null;
+}
+
+export function encodeVcomMaxLimit(voltage: number, avdd: number): number | null {
+  if (avdd <= 0) return null;
+  const code = Math.round(voltage * 128.0 / avdd - 1);
+  return code >= 0 && code <= 0x7f ? code : null;
+}
+
+export function encodeVcomLimit(voltage: number, avdd: number): number | null {
+  return encodeVcomMinLimit(voltage, avdd);
 }
 
 function normalizeVcomRange(vcomMinV: number, vcomMaxV: number): [number, number] {

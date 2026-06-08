@@ -122,8 +122,16 @@ pub fn decode_vss1(value: u8) -> f64 {
     -3.0 - (value & 0x1F) as f64 * 0.5
 }
 
-pub fn decode_vcom_limit(value: u8, avdd: f64) -> f64 {
+pub fn decode_vcom_min_limit(value: u8, avdd: f64) -> f64 {
     avdd * (value & 0x7F) as f64 / 128.0
+}
+
+pub fn decode_vcom_max_limit(value: u8, avdd: f64) -> f64 {
+    avdd * ((value & 0x7F) as f64 + 1.0) / 128.0
+}
+
+pub fn decode_vcom_limit(value: u8, avdd: f64) -> f64 {
+    decode_vcom_min_limit(value, avdd)
 }
 
 pub fn decode_vcom_output(value: u8, vcom_min: f64, vcom_max: f64) -> f64 {
@@ -186,8 +194,10 @@ pub fn decode_register_voltage(
     mode_value: Option<u8>,
 ) -> Option<f64> {
     let avdd = decode_avdd(avdd_value.unwrap_or(DEFAULT_REG_AVDD_VALUE), mode_value);
-    let vcom_min = decode_vcom_limit(vcom_min_value.unwrap_or(DEFAULT_REG_VCOM_MIN_VALUE), avdd);
-    let vcom_max = decode_vcom_limit(vcom_max_value.unwrap_or(DEFAULT_REG_VCOM_MAX_VALUE), avdd);
+    let vcom_min =
+        decode_vcom_min_limit(vcom_min_value.unwrap_or(DEFAULT_REG_VCOM_MIN_VALUE), avdd);
+    let vcom_max =
+        decode_vcom_max_limit(vcom_max_value.unwrap_or(DEFAULT_REG_VCOM_MAX_VALUE), avdd);
 
     match addr {
         REG_AVDD => Some(decode_avdd(value, mode_value)),
@@ -197,7 +207,8 @@ pub fn decode_register_voltage(
         REG_VGL_NT | REG_VGL_LT_HT => Some(decode_vgl(value)),
         REG_VSS1 => Some(decode_vss1(value)),
         REG_VCOM1_NT => Some(decode_vcom_output(value, vcom_min, vcom_max)),
-        REG_VCOM_MAX | REG_VCOM_MIN => Some(decode_vcom_limit(value, avdd)),
+        REG_VCOM_MAX => Some(decode_vcom_max_limit(value, avdd)),
+        REG_VCOM_MIN => Some(decode_vcom_min_limit(value, avdd)),
         REG_VCOM2DAC => Some(decode_vcom2dac(value, vcom_min, vcom_max)),
         _ => None,
     }
