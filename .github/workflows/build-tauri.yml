@@ -62,6 +62,36 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const expected = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          const tauri = require('./src-tauri/tauri.conf.json');
+          const cargo = fs.readFileSync('./src-tauri/Cargo.toml', 'utf8')
+            .match(/^version = "([^"]+)"/m)?.[1];
+          const versions = {
+            'package.json': pkg.version,
+            'package-lock.json': lock.version,
+            'package-lock.json packages root': lock.packages?.['']?.version,
+            'src-tauri/tauri.conf.json': tauri.version,
+            'src-tauri/Cargo.toml': cargo,
+          };
+          let ok = true;
+          for (const [file, version] of Object.entries(versions)) {
+            if (version !== expected) {
+              console.error(`${file}: ${version} != tag ${expected}`);
+              ok = false;
+            }
+          }
+          if (!ok) process.exit(1);
+          console.log(`Release version OK: ${expected}`);
+          NODE
+
       - name: Build app and optionally publish Release assets
         uses: tauri-apps/tauri-action@v0.6.0
         env:
