@@ -359,6 +359,10 @@ impl Ft232hI2cBus {
         let cmd = cmd
             // Set initial pin state: SCL=1(AD0), SDA=1(AD1), AD2=input
             .set_gpio_lower(0x03, 0x03)
+            // Leave idle to the external pull-ups instead of actively driving
+            // the lines. If a previous failed transfer left AD0 low, this frees
+            // SCL immediately after MPSSE setup.
+            .set_gpio_lower(0x00, 0x00)
             .send_immediate();
 
         self.device
@@ -450,6 +454,16 @@ impl Ft232hI2cBus {
             .map_err(|e| format!("Failed to set FTDI clock to {}Hz: {}", frequency, e))
     }
 
+    fn release_i2c_bus(&mut self) -> Result<(), String> {
+        let cmd = MpsseCmdBuilder::new()
+            // AD0/SCL=input, AD1/SDA-out=input, AD2/SDA-in=input.
+            .set_gpio_lower(0x00, 0x00)
+            .send_immediate();
+        self.device
+            .write_all(cmd.as_slice())
+            .map_err(|e| format!("Failed to release FTDI I2C bus: {}", e))
+    }
+
     /// I2C bus recovery: toggle SCL 9 times with SDA released, then STOP.
     /// This frees a slave that may be holding SDA low from a previously
     /// interrupted transaction.
@@ -469,6 +483,7 @@ impl Ft232hI2cBus {
             .set_gpio_lower(0x00, 0x03) // SDA=0, SCL=0
             .set_gpio_lower(0x01, 0x03) // SDA=0, SCL=1
             .set_gpio_lower(0x03, 0x03) // SDA=1, SCL=1 → STOP
+            .set_gpio_lower(0x00, 0x00) // release SCL/SDA to pull-ups
             .send_immediate();
 
         self.device
@@ -498,6 +513,7 @@ impl Ft232hI2cBus {
             .set_gpio_lower(0x00, 0x03) // SDA=0, SCL=0
             .set_gpio_lower(0x01, 0x03) // SDA=0, SCL=1
             .set_gpio_lower(0x03, 0x03) // SDA=1, SCL=1 (STOP)
+            .set_gpio_lower(0x00, 0x00) // release SCL/SDA to pull-ups
             .send_immediate();
 
         self.device
@@ -561,25 +577,37 @@ impl Ft232hI2cBus {
 }
 
 #[cfg(feature = "ft232h")]
+impl Drop for Ft232hI2cBus {
+    fn drop(&mut self) {
+        let _ = self.release_i2c_bus();
+        let _ = self.device.set_bit_mode(0x00, BitMode::Reset);
+    }
+}
+
+#[cfg(feature = "ft232h")]
 impl I2cBus for Ft232hI2cBus {
     fn write(&mut self, addr: u8, data: &[u8]) -> Result<(), String> {
-        self.i2c_start()?;
+        let result = (|| {
+            self.i2c_start()?;
 
-        let addr_byte = (addr << 1) & 0xFE; // W bit = 0
-        if !self.i2c_write_byte(addr_byte)? {
-            self.i2c_stop()?;
-            return Err(format!("No ACK from slave 0x{:02X} (write)", addr));
-        }
-
-        for &byte in data {
-            if !self.i2c_write_byte(byte)? {
-                self.i2c_stop()?;
-                return Err(format!("NACK during write to slave 0x{:02X}", addr));
+            let addr_byte = (addr << 1) & 0xFE; // W bit = 0
+            if !self.i2c_write_byte(addr_byte)? {
+                return Err(format!("No ACK from slave 0x{:02X} (write)", addr));
             }
-        }
 
-        self.i2c_stop()?;
-        Ok(())
+            for &byte in data {
+                if !self.i2c_write_byte(byte)? {
+                    return Err(format!("NACK during write to slave 0x{:02X}", addr));
+                }
+            }
+
+            self.i2c_stop()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = self.i2c_stop();
+        }
+        result
     }
 
     fn bus_recovery(&mut self) -> Result<(), String> {
@@ -591,21 +619,26 @@ impl I2cBus for Ft232hI2cBus {
             return Ok(());
         }
 
-        self.i2c_start()?;
+        let result = (|| {
+            self.i2c_start()?;
 
-        let addr_byte = (addr << 1) | 0x01; // R bit = 1
-        if !self.i2c_write_byte(addr_byte)? {
+            let addr_byte = (addr << 1) | 0x01; // R bit = 1
+            if !self.i2c_write_byte(addr_byte)? {
+                return Err(format!("No ACK from slave 0x{:02X} (read)", addr));
+            }
+
+            let last = buf.len() - 1;
+            for (i, byte) in buf.iter_mut().enumerate() {
+                *byte = self.i2c_read_byte(i != last)?; // NACK on last byte
+            }
+
             self.i2c_stop()?;
-            return Err(format!("No ACK from slave 0x{:02X} (read)", addr));
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = self.i2c_stop();
         }
-
-        let last = buf.len() - 1;
-        for (i, byte) in buf.iter_mut().enumerate() {
-            *byte = self.i2c_read_byte(i != last)?; // NACK on last byte
-        }
-
-        self.i2c_stop()?;
-        Ok(())
+        result
     }
 
     fn write_read(
@@ -614,43 +647,46 @@ impl I2cBus for Ft232hI2cBus {
         write_data: &[u8],
         read_buf: &mut [u8],
     ) -> Result<(), String> {
-        // Write phase: START + addr(W) + data
-        self.i2c_start()?;
+        let result = (|| {
+            // Write phase: START + addr(W) + data
+            self.i2c_start()?;
 
-        let addr_w = (addr << 1) & 0xFE;
-        if !self.i2c_write_byte(addr_w)? {
-            self.i2c_stop()?;
-            return Err(format!("No ACK from slave 0x{:02X} (write phase)", addr));
-        }
-
-        for &byte in write_data {
-            if !self.i2c_write_byte(byte)? {
-                self.i2c_stop()?;
-                return Err(format!("NACK during write to slave 0x{:02X}", addr));
+            let addr_w = (addr << 1) & 0xFE;
+            if !self.i2c_write_byte(addr_w)? {
+                return Err(format!("No ACK from slave 0x{:02X} (write phase)", addr));
             }
-        }
 
-        if read_buf.is_empty() {
+            for &byte in write_data {
+                if !self.i2c_write_byte(byte)? {
+                    return Err(format!("NACK during write to slave 0x{:02X}", addr));
+                }
+            }
+
+            if read_buf.is_empty() {
+                self.i2c_stop()?;
+                return Ok(());
+            }
+
+            // Read phase: Repeated START + addr(R) + read
+            self.i2c_start()?;
+
+            let addr_r = (addr << 1) | 0x01;
+            if !self.i2c_write_byte(addr_r)? {
+                return Err(format!("No ACK from slave 0x{:02X} (read phase)", addr));
+            }
+
+            let last = read_buf.len() - 1;
+            for (i, byte) in read_buf.iter_mut().enumerate() {
+                *byte = self.i2c_read_byte(i != last)?;
+            }
+
             self.i2c_stop()?;
-            return Ok(());
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = self.i2c_stop();
         }
-
-        // Read phase: Repeated START + addr(R) + read
-        self.i2c_start()?;
-
-        let addr_r = (addr << 1) | 0x01;
-        if !self.i2c_write_byte(addr_r)? {
-            self.i2c_stop()?;
-            return Err(format!("No ACK from slave 0x{:02X} (read phase)", addr));
-        }
-
-        let last = read_buf.len() - 1;
-        for (i, byte) in read_buf.iter_mut().enumerate() {
-            *byte = self.i2c_read_byte(i != last)?;
-        }
-
-        self.i2c_stop()?;
-        Ok(())
+        result
     }
 }
 
