@@ -218,12 +218,30 @@ impl ChipDevice {
             log::warn!("Bus recovery failed (non-fatal): {}", e);
         }
 
-        let pmic_ok = self.bus.write(self.spec.pmic_addr, &[]).is_ok();
-        let vcom_ok = self
-            .spec
-            .vcom_addr
-            .map(|addr| self.bus.write(addr, &[]).is_ok());
+        let mut buf = [0u8; 1];
+        let pmic_ok = self
+            .bus
+            .write_read(self.spec.pmic_addr, &[self.spec.avdd_reg], &mut buf)
+            .is_ok();
 
-        Ok((pmic_ok, vcom_ok))
+        // Do not probe the optional VCOM slave during connect. Some boards do
+        // not expose/enable 0x74, and an address-only write creates confusing
+        // NACKs on the logic analyzer without proving the PMIC is bad.
+        Ok((pmic_ok, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChipDevice;
+    use crate::bridges::ftdi::MockI2cBus;
+    use crate::pmu::chip::{spec_for_model, ChipModel};
+
+    #[test]
+    fn probe_reads_pmic_and_skips_vcom_probe() {
+        let bus = Box::new(MockI2cBus::new(ChipModel::Ek86317a));
+        let mut device = ChipDevice::new(bus, spec_for_model(ChipModel::Ek86317a));
+
+        assert_eq!(device.probe().unwrap(), (true, None));
     }
 }

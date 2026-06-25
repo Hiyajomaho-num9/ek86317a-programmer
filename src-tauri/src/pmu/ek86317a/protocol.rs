@@ -291,8 +291,8 @@ impl Ek86317a {
     // Probe / Detection
     // ========================================================================
 
-    /// Probe for PMIC and VCOM slaves on the I2C bus.
-    /// Uses address-only write (like i2cdetect) — the most reliable detection method.
+    /// Probe for PMIC on the I2C bus.
+    /// Uses a real register read instead of address-only writes.
     /// Returns (pmic_detected, vcom_detected).
     pub fn probe(&mut self) -> Result<(bool, bool), String> {
         // Bus recovery: free any slave holding SDA low from a previous interrupted transaction
@@ -300,11 +300,13 @@ impl Ek86317a {
             log::warn!("Bus recovery failed (non-fatal): {}", e);
         }
 
-        // Address-only probe: START + addr_W + check ACK + STOP
-        // This is the i2cdetect standard — minimal transaction, no register side effects
-        let pmic_ok = self.bus.write(PMIC_ADDR, &[]).is_ok();
-        let vcom_ok = self.bus.write(VCOM_ADDR, &[]).is_ok();
+        let mut buf = [0u8; 1];
+        let pmic_ok = self
+            .bus
+            .write_read(PMIC_ADDR, &[REG_AVDD], &mut buf)
+            .is_ok();
 
-        Ok((pmic_ok, vcom_ok))
+        // Do not auto-probe VCOM 0x74 here; it may be absent or disabled.
+        Ok((pmic_ok, false))
     }
 }
