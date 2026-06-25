@@ -122,8 +122,8 @@ export async function writeAllDacRegisters(registers: [number, number][]): Promi
   return safeInvoke('write_all_dac_registers', { entries: registers });
 }
 
-export async function exportEeprom(path: string): Promise<void> {
-  return safeInvoke('export_eeprom', { path });
+export async function exportRegisters(path: string, chipModel: ChipModel, registers: [number, number][]): Promise<void> {
+  return safeInvoke('export_registers', { path, chipModel, entries: registers });
 }
 
 export async function writeAllToEeprom(): Promise<void> {

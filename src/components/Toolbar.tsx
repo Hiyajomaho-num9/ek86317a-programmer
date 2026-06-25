@@ -306,9 +306,10 @@ function Toolbar() {
     const sep = dir.includes('\\') ? '\\' : '/';
     const fullPath = dir.endsWith(sep) ? `${dir}${fileName}` : `${dir}${sep}${fileName}`;
 
-    await runToolbarAction('Exporting EEPROM to BIN...', async () => {
+    await runToolbarAction('Exporting UI to BIN...', async () => {
       try {
-        await cmd.exportEeprom(fullPath);
+        const regs = Array.from(ctx.dacRegisters.entries()) as [number, number][];
+        await cmd.exportRegisters(fullPath, ctx.chipModel, regs);
         ctx.addLog('success', `Exported: ${fullPath}`);
       } catch (error: unknown) {
         ctx.addLog('error', `Export failed: ${error}`);
@@ -426,7 +427,7 @@ function Toolbar() {
           placeholder="e.g. V500DJ7-QE1"
           disabled={toolbarBusy}
         />
-        <button onClick={handleExportBin} className={btnGreen} disabled={ctx.connected !== true || toolbarBusy}>Export BIN</button>
+        <button onClick={handleExportBin} className={btnGreen} disabled={toolbarBusy}>Export BIN</button>
       </div>
     </div>
   );

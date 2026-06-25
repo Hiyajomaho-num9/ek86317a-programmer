@@ -4,7 +4,7 @@ use std::path::Path;
 
 use tauri::State;
 
-use crate::pmu::chip::{spec_for_model, ChipModel};
+use crate::pmu::chip::{self, spec_for_model, ChipModel};
 use crate::pmu::firmware::FirmwareImage;
 
 use super::{
@@ -140,26 +140,51 @@ pub async fn verify_firmware(
 }
 
 #[tauri::command]
-pub async fn export_eeprom(state: State<'_, DeviceState>, path: String) -> Result<(), String> {
-    log::info!("Exporting EEPROM to: {}", path);
+pub async fn export_registers(
+    path: String,
+    chip_model: ChipModel,
+    entries: Vec<(u8, u8)>,
+) -> Result<(), String> {
+    log::info!(
+        "Exporting UI registers to BIN: {} as {}",
+        path,
+        chip_model.display_name()
+    );
 
-    super::with_device(&state, move |device| {
-        let eeprom_data = device.read_all_eeprom()?;
-        let max_addr = eeprom_data
-            .iter()
-            .map(|(a, _)| *a as usize)
-            .max()
-            .unwrap_or(0);
-
-        let mut bin = vec![0u8; max_addr + 1];
-        for (addr, value) in &eeprom_data {
-            bin[*addr as usize] = *value;
-        }
-
-        std::fs::write(&path, &bin).map_err(|e| format!("Failed to write file: {}", e))?;
-        Ok(())
+    tokio::task::spawn_blocking(move || {
+        let bin = build_export_bin(chip_model, &entries)?;
+        std::fs::write(&path, &bin).map_err(|e| format!("Failed to write file: {}", e))
     })
     .await
+    .map_err(|e| format!("Export task failed: {}", e))?
+}
+
+fn build_export_bin(chip_model: ChipModel, entries: &[(u8, u8)]) -> Result<Vec<u8>, String> {
+    let spec = spec_for_model(chip_model);
+    let addresses = chip::register_addresses(chip_model);
+    let max_addr = addresses
+        .iter()
+        .copied()
+        .filter(|addr| *addr != spec.control_reg)
+        .max()
+        .ok_or_else(|| format!("No exportable registers for {}", chip_model.display_name()))?
+        as usize;
+
+    let mut bin = vec![0u8; max_addr + 1];
+    for (addr, value) in chip::default_register_map(chip_model) {
+        if addr != spec.control_reg && (addr as usize) < bin.len() {
+            bin[addr as usize] = value;
+        }
+    }
+
+    for (addr, value) in entries {
+        if *addr == spec.control_reg || !addresses.contains(addr) {
+            continue;
+        }
+        bin[*addr as usize] = *value;
+    }
+
+    Ok(bin)
 }
 
 #[tauri::command]
@@ -183,6 +208,24 @@ pub async fn verify_all(
         })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_export_bin;
+    use crate::pmu::chip::ChipModel;
+
+    #[test]
+    fn export_bin_uses_ui_value_without_device() {
+        let bin = build_export_bin(ChipModel::Ek86317a, &[(0x00, 0x12)]).unwrap();
+        assert_eq!(bin[0x00], 0x12);
+    }
+
+    #[test]
+    fn export_bin_keeps_defaults_for_missing_ui_values() {
+        let bin = build_export_bin(ChipModel::Ek86317a, &[]).unwrap();
+        assert_eq!(bin[0x0a], 0x3f);
+    }
 }
 
 #[tauri::command]

@@ -27,7 +27,7 @@ pub fn run() {
             pmu::commands::firmware::verify_firmware,
             pmu::commands::firmware::verify_all,
             pmu::commands::firmware::write_all_dac_registers,
-            pmu::commands::firmware::export_eeprom,
+            pmu::commands::firmware::export_registers,
             pmu::commands::eeprom::write_all_to_eeprom,
             pmu::commands::eeprom::write_vcom1_to_eeprom,
             pmu::commands::eeprom::read_fault_flags,

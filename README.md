@@ -1,6 +1,6 @@
 # EK86317A Programmer
 
-这是一个为 EK86317A/LP6281/iML8947K 开发的桌面调试工具。通过 FT232H 走 I2C 协议，实现对 PMU / VCOM 相关寄存器的读写、校验以及 EEPROM 烧录。
+这是一个为 EK86317A/LP6281/iML8947K 开发的桌面调试工具。通过 FTDI MPSSE / CH341A / CH347F 走 I2C 协议，实现对 PMU / VCOM 相关寄存器的读写、校验以及 EEPROM 烧录。
 
 做这个工具的初衷是傻逼 Fitpower 在 2026 年用一个 8051 单片机和一个脑子抽了有病、没 log、逻辑还恶心人的上位机，关键这傻逼上位机还写 key 去算时长，是不是有病？
 
@@ -26,7 +26,7 @@
 │   ├── hooks/          # 设备/寄存器状态逻辑
 │   └── lib/            # 芯片模型、寄存器映射与 Tauri 命令封装
 ├── src-tauri/          # Rust 后端
-│   ├── src/bridges/    # 桥接器抽象与 FT232H/CH347F 实现
+│   ├── src/bridges/    # 桥接器抽象与 FTDI/CH34x/CH347 实现
 │   ├── src/pmu/        # PMU 芯片族、公用协议、命令入口
 │   └── vendor/ch347/   # CH347 官方 Windows/Linux SDK 库
 ├── package.json
@@ -53,10 +53,10 @@ npm install
 硬件和界面调试：
 
 ```bash
-npm run tauri dev -- --features ft232h
+npm run tauri dev
 ```
 
-注：Debug 构建下如果没有检测到 FT232H，会自动生成 `Mock FT232H (development)` 设备。
+注：Debug 构建下如果没有检测到真实桥接器，会自动生成 `Mock FT232H (development)` 设备。
 
 ## 编译打包
 
@@ -65,7 +65,7 @@ npm run tauri dev -- --features ft232h
 编译命令：
 
 ```bash
-cargo tauri build --features ft232h
+cargo tauri build
 ```
 
 如果在 Linux 环境下编译，需要先安装这些依赖：
@@ -77,22 +77,23 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindic
 ## 使用方法
 
 - 选择芯片
-- **Scan & Connect**: 点击 `Scan`，扫到 FT232H 后连接
+- **Scan & Connect**: 点击 `Scan`，扫到 FTDI / CH341A / CH347F 后连接
 - **Detect**: 确认 I2C 链路上 PMIC 芯片是否正常在线
 - **Read DAC / Read EEPROM**: 将 DAC / EEPROM 数据同步到 UI
 - 在 UI 上修改相对应参数
+- **Export BIN**: 直接从 UI 当前参数导出，不需要连接烧录工具或芯片
 - **Write EEPROM**: 烧录到芯片，参数永久保存在 PMU
 - **Browse**: 导入 `.bin` 固件
 
 ## 避坑指南
 
 - 频繁烧写会损耗寿命，建议先通过 `Write DAC` 确认参数没问题，再点 `Write EEPROM`
-- Release 构建默认不会暴露 Mock 设备，必须确保 FTDI 驱动环境正常
+- Release 构建默认不会暴露 Mock 设备，必须确保 FTDI / WCH 驱动环境正常
 - 为了版本管理，`Export BIN` 对文件名的自定义程度仅允许用户修改 panel name，生成的 bin 文件以 `PMU_PANELNAME_时间戳` 格式输出
 
 ## 未来规划
 
-- 添加更多 IIC 调试工具，例如ft2232h和cha341a。不过具体还得看看其他工具对 ft232h 以外工具的支持情况
+- 继续补更多 IIC 调试工具。
 
 ## License
 

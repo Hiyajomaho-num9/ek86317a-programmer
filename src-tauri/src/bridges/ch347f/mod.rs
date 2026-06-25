@@ -1,6 +1,6 @@
-//! CH347F bridge backend.
+//! CH34x/CH347 bridge backend.
 //!
-//! This module provides a CH347F-backed I2C bridge implementation for the
+//! This module provides a WCH-backed I2C bridge implementation for the
 //! shared PMU transport layer.
 
 pub mod i2c;

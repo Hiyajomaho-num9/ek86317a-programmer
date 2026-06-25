@@ -5,23 +5,27 @@ pub struct Ch347I2cBus {
     #[cfg(all(feature = "ch347f", target_os = "windows"))]
     index: u32,
     #[cfg(all(feature = "ch347f", target_os = "windows"))]
+    kind: windows_api::BridgeKind,
+    #[cfg(all(feature = "ch347f", target_os = "windows"))]
     api: windows_api::Ch347Api,
     #[cfg(all(feature = "ch347f", target_os = "linux"))]
     fd: i32,
+    #[cfg(all(feature = "ch347f", target_os = "linux"))]
+    kind: linux_api::BridgeKind,
     #[cfg(all(feature = "ch347f", target_os = "linux"))]
     path: String,
 }
 
 impl Ch347I2cBus {
-    pub fn list_devices() -> Result<Vec<(u32, String)>, String> {
+    pub fn list_devices() -> Result<Vec<(String, String)>, String> {
         #[cfg(all(feature = "ch347f", target_os = "windows"))]
         {
-            return windows_api::list_devices();
+            windows_api::list_devices()
         }
 
         #[cfg(all(feature = "ch347f", target_os = "linux"))]
         {
-            return linux_api::list_devices();
+            linux_api::list_devices()
         }
 
         #[cfg(all(
@@ -38,26 +42,28 @@ impl Ch347I2cBus {
         }
     }
 
-    pub fn open(index: u32, clock_hz: u32) -> Result<Self, String> {
+    pub fn open(selector: &str, clock_hz: u32) -> Result<Self, String> {
         #[cfg(all(feature = "ch347f", target_os = "windows"))]
         {
             let api = windows_api::Ch347Api::load()?;
-            api.open_i2c(index, clock_hz)?;
-            return Ok(Self {
+            let (index, kind) = api.open_i2c(selector, clock_hz)?;
+            Ok(Self {
                 bus_recovery_logged: false,
                 index,
+                kind,
                 api,
-            });
+            })
         }
 
         #[cfg(all(feature = "ch347f", target_os = "linux"))]
         {
-            let (fd, path) = linux_api::open_i2c(index, clock_hz)?;
-            return Ok(Self {
+            let (fd, kind, path) = linux_api::open_i2c(selector, clock_hz)?;
+            Ok(Self {
                 bus_recovery_logged: false,
                 fd,
+                kind,
                 path,
-            });
+            })
         }
 
         #[cfg(all(
@@ -65,13 +71,13 @@ impl Ch347I2cBus {
             not(any(target_os = "windows", target_os = "linux"))
         ))]
         {
-            let _ = (index, clock_hz);
+            let _ = (selector, clock_hz);
             Err("CH347F support is currently implemented for Windows and Linux only".to_string())
         }
 
         #[cfg(not(feature = "ch347f"))]
         {
-            let _ = (index, clock_hz);
+            let _ = (selector, clock_hz);
             Err("CH347F support not compiled in. Rebuild with --features ch347f".to_string())
         }
     }
@@ -79,18 +85,17 @@ impl Ch347I2cBus {
     fn stream_write_only(&mut self, write_buf: &mut [u8]) -> Result<(), String> {
         #[cfg(all(feature = "ch347f", target_os = "windows"))]
         {
-            return self
-                .api
-                .stream_i2c(self.index, write_buf, None)
+            self.api
+                .stream_i2c(self.kind, self.index, write_buf, None)
                 .map(|_| ())
-                .map_err(|e| format!("CH347 write failed on device #{}: {}", self.index, e));
+                .map_err(|e| format!("CH34x/CH347 write failed on device #{}: {}", self.index, e))
         }
 
         #[cfg(all(feature = "ch347f", target_os = "linux"))]
         {
-            return linux_api::stream_i2c(self.fd, write_buf, None)
+            linux_api::stream_i2c(self.kind, self.fd, write_buf, None)
                 .map(|_| ())
-                .map_err(|e| format!("CH347 write failed on {}: {}", self.path, e));
+                .map_err(|e| format!("CH34x/CH347 write failed on {}: {}", self.path, e))
         }
 
         #[cfg(any(
@@ -110,19 +115,18 @@ impl Ch347I2cBus {
         #[cfg(all(feature = "ch347f", target_os = "windows"))]
         {
             let mut write_buf = [encode_read_addr(addr)];
-            return self
-                .api
-                .stream_i2c(self.index, &mut write_buf, Some(read_buf))
+            self.api
+                .stream_i2c(self.kind, self.index, &mut write_buf, Some(read_buf))
                 .map(|_| ())
-                .map_err(|e| format!("CH347 read failed on device #{}: {}", self.index, e));
+                .map_err(|e| format!("CH34x/CH347 read failed on device #{}: {}", self.index, e))
         }
 
         #[cfg(all(feature = "ch347f", target_os = "linux"))]
         {
             let mut write_buf = [encode_read_addr(addr)];
-            return linux_api::stream_i2c(self.fd, &mut write_buf, Some(read_buf))
+            linux_api::stream_i2c(self.kind, self.fd, &mut write_buf, Some(read_buf))
                 .map(|_| ())
-                .map_err(|e| format!("CH347 read failed on {}: {}", self.path, e));
+                .map_err(|e| format!("CH34x/CH347 read failed on {}: {}", self.path, e))
         }
 
         #[cfg(any(
@@ -188,14 +192,14 @@ impl I2cBus for Ch347I2cBus {
 #[cfg(all(feature = "ch347f", target_os = "windows"))]
 impl Drop for Ch347I2cBus {
     fn drop(&mut self) {
-        self.api.close_device(self.index);
+        self.api.close_device(self.kind, self.index);
     }
 }
 
 #[cfg(all(feature = "ch347f", target_os = "linux"))]
 impl Drop for Ch347I2cBus {
     fn drop(&mut self) {
-        linux_api::close_device(self.fd);
+        linux_api::close_device(self.kind, self.fd);
     }
 }
 
@@ -239,6 +243,12 @@ mod windows_api {
     type StreamI2cRetAckFn =
         unsafe extern "system" fn(u32, u32, *mut c_void, u32, *mut c_void, *mut u32) -> Bool;
 
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub(super) enum BridgeKind {
+        Ch341,
+        Ch347,
+    }
+
     pub(super) struct Ch347Api {
         _library: Library,
         open_device: OpenDeviceFn,
@@ -247,6 +257,11 @@ mod windows_api {
         i2c_set: I2cSetFn,
         stream_i2c: StreamI2cFn,
         stream_i2c_ret_ack: Option<StreamI2cRetAckFn>,
+        ch341_open_device: Option<OpenDeviceFn>,
+        ch341_close_device: Option<CloseDeviceFn>,
+        ch341_set_stream: Option<I2cSetFn>,
+        ch341_set_timeout: Option<unsafe extern "system" fn(u32, u32, u32) -> Bool>,
+        ch341_stream_i2c: Option<StreamI2cFn>,
     }
 
     #[repr(C)]
@@ -329,6 +344,17 @@ mod windows_api {
                 let stream_i2c = load_symbol::<StreamI2cFn>(&library, b"CH347StreamI2C\0")?;
                 let stream_i2c_ret_ack =
                     load_optional_symbol::<StreamI2cRetAckFn>(&library, b"CH347StreamI2C_RetACK\0");
+                let ch341_open_device =
+                    load_optional_symbol::<OpenDeviceFn>(&library, b"CH341OpenDevice\0");
+                let ch341_close_device =
+                    load_optional_symbol::<CloseDeviceFn>(&library, b"CH341CloseDevice\0");
+                let ch341_set_stream =
+                    load_optional_symbol::<I2cSetFn>(&library, b"CH341SetStream\0");
+                let ch341_set_timeout = load_optional_symbol::<
+                    unsafe extern "system" fn(u32, u32, u32) -> Bool,
+                >(&library, b"CH341SetTimeout\0");
+                let ch341_stream_i2c =
+                    load_optional_symbol::<StreamI2cFn>(&library, b"CH341StreamI2C\0");
 
                 Ok(Self {
                     _library: library,
@@ -338,33 +364,82 @@ mod windows_api {
                     i2c_set,
                     stream_i2c,
                     stream_i2c_ret_ack,
+                    ch341_open_device,
+                    ch341_close_device,
+                    ch341_set_stream,
+                    ch341_set_timeout,
+                    ch341_stream_i2c,
                 })
             }
         }
 
-        pub(super) fn open_i2c(&self, index: u32, clock_hz: u32) -> Result<(), String> {
-            let handle = unsafe { (self.open_device)(index) };
-            if handle == INVALID_HANDLE_VALUE {
-                return Err(format!("Failed to open CH347F device #{}", index));
+        pub(super) fn open_i2c(
+            &self,
+            selector: &str,
+            clock_hz: u32,
+        ) -> Result<(u32, BridgeKind), String> {
+            let (kind, index) = parse_selector(selector)?;
+            match kind {
+                BridgeKind::Ch347 => {
+                    let handle = unsafe { (self.open_device)(index) };
+                    if handle == INVALID_HANDLE_VALUE {
+                        return Err(format!("Failed to open CH347 device #{}", index));
+                    }
+
+                    let mode = super::i2c_mode_for_clock(clock_hz);
+                    if unsafe { (self.i2c_set)(index, mode) } == 0 {
+                        self.close_device(kind, index);
+                        return Err(format!("Failed to set CH347 I2C clock to {}Hz", clock_hz));
+                    }
+                }
+                BridgeKind::Ch341 => {
+                    let open_device = self.ch341_open_device.ok_or_else(|| {
+                        "CH341OpenDevice is missing from CH347DLLA64.dll".to_string()
+                    })?;
+                    let handle = unsafe { open_device(index) };
+                    if handle == INVALID_HANDLE_VALUE {
+                        return Err(format!("Failed to open CH341 device #{}", index));
+                    }
+
+                    if let Some(set_timeout) = self.ch341_set_timeout {
+                        if unsafe { set_timeout(index, 2_000, 2_000) } == 0 {
+                            self.close_device(kind, index);
+                            return Err(format!("Failed to set CH341 timeouts on #{}", index));
+                        }
+                    }
+
+                    let set_stream = self.ch341_set_stream.ok_or_else(|| {
+                        "CH341SetStream is missing from CH347DLLA64.dll".to_string()
+                    })?;
+                    let mode = ch341_i2c_mode_for_clock(clock_hz);
+                    if unsafe { set_stream(index, mode) } == 0 {
+                        self.close_device(kind, index);
+                        return Err(format!("Failed to set CH341 I2C clock to {}Hz", clock_hz));
+                    }
+                }
             }
 
-            let mode = super::i2c_mode_for_clock(clock_hz);
-            if unsafe { (self.i2c_set)(index, mode) } == 0 {
-                self.close_device(index);
-                return Err(format!("Failed to set CH347F I2C clock to {}Hz", clock_hz));
-            }
-
-            Ok(())
+            Ok((index, kind))
         }
 
-        pub(super) fn close_device(&self, index: u32) {
+        pub(super) fn close_device(&self, kind: BridgeKind, index: u32) {
             unsafe {
-                let _ = (self.close_device)(index);
+                match kind {
+                    BridgeKind::Ch347 => {
+                        let _ = (self.close_device)(index);
+                    }
+                    BridgeKind::Ch341 => {
+                        if let Some(close_device) = self.ch341_close_device {
+                            let _ = close_device(index);
+                        }
+                    }
+                }
             }
         }
 
         pub(super) fn stream_i2c(
             &self,
+            kind: BridgeKind,
             index: u32,
             write_buf: &mut [u8],
             read_buf: Option<&mut [u8]>,
@@ -373,6 +448,25 @@ mod windows_api {
             let read_ptr = read_buf
                 .map(|buf| buf.as_mut_ptr() as *mut c_void)
                 .unwrap_or(std::ptr::null_mut());
+
+            if kind == BridgeKind::Ch341 {
+                let stream_i2c = self
+                    .ch341_stream_i2c
+                    .ok_or_else(|| "CH341StreamI2C is missing from CH347DLLA64.dll".to_string())?;
+                let ok = unsafe {
+                    stream_i2c(
+                        index,
+                        write_buf.len() as u32,
+                        write_buf.as_mut_ptr() as *mut c_void,
+                        read_len,
+                        read_ptr,
+                    )
+                };
+                if ok == 0 {
+                    return Err("CH341StreamI2C returned failure".to_string());
+                }
+                return Ok(None);
+            }
 
             if let Some(stream_i2c_ret_ack) = self.stream_i2c_ret_ack {
                 let mut ack_count = 0u32;
@@ -409,28 +503,70 @@ mod windows_api {
         }
     }
 
-    pub(super) fn list_devices() -> Result<Vec<(u32, String)>, String> {
+    pub(super) fn list_devices() -> Result<Vec<(String, String)>, String> {
         let api = Ch347Api::load()?;
         let mut devices = Vec::new();
 
         for index in 0..DEVICE_SLOTS {
             let handle = unsafe { (api.open_device)(index) };
-            if handle == INVALID_HANDLE_VALUE {
+            if handle != INVALID_HANDLE_VALUE {
+                let mut info = DeviceInfo::default();
+                let description = if unsafe { (api.get_device_info)(index, &mut info) } != 0 {
+                    format_device_description(&info)
+                } else {
+                    "CH347 bridge".to_string()
+                };
+
+                api.close_device(BridgeKind::Ch347, index);
+                devices.push((format!("ch347-{}", index), description));
                 continue;
             }
 
-            let mut info = DeviceInfo::default();
-            let description = if unsafe { (api.get_device_info)(index, &mut info) } != 0 {
-                format_device_description(&info)
-            } else {
-                "CH347 bridge".to_string()
-            };
-
-            api.close_device(index);
-            devices.push((index, description));
+            if let Some(open_device) = api.ch341_open_device {
+                let handle = unsafe { open_device(index) };
+                if handle != INVALID_HANDLE_VALUE {
+                    api.close_device(BridgeKind::Ch341, index);
+                    devices.push((format!("ch341-{}", index), "CH341 bridge".to_string()));
+                }
+            }
         }
 
         Ok(devices)
+    }
+
+    fn parse_selector(selector: &str) -> Result<(BridgeKind, u32), String> {
+        if let Some(index) = selector.strip_prefix("ch341-") {
+            return Ok((
+                BridgeKind::Ch341,
+                index
+                    .parse()
+                    .map_err(|_| format!("Invalid CH341 selector: {}", selector))?,
+            ));
+        }
+        if let Some(index) = selector.strip_prefix("ch347-") {
+            return Ok((
+                BridgeKind::Ch347,
+                index
+                    .parse()
+                    .map_err(|_| format!("Invalid CH347 selector: {}", selector))?,
+            ));
+        }
+
+        Ok((
+            BridgeKind::Ch347,
+            selector
+                .parse()
+                .map_err(|_| format!("Invalid CH34x/CH347 selector: {}", selector))?,
+        ))
+    }
+
+    fn ch341_i2c_mode_for_clock(clock_hz: u32) -> u32 {
+        match clock_hz {
+            0..=35_000 => 0x00,
+            35_001..=150_000 => 0x01,
+            150_001..=600_000 => 0x02,
+            _ => 0x03,
+        }
     }
 
     fn decode_c_string(raw: &[u8]) -> String {
@@ -484,9 +620,16 @@ mod linux_api {
 
     const CH34X_DEVICE_DIR: &str = "/dev";
     const CH34X_DEVICE_PREFIX: &str = "ch34x_pis";
+    const HIDRAW_DEVICE_PREFIX: &str = "hidraw";
     const DEFAULT_TIMEOUT_MS: u32 = 2_000;
 
-    pub(super) fn list_devices() -> Result<Vec<(u32, String)>, String> {
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub(super) enum BridgeKind {
+        Ch34x,
+        Ch347,
+    }
+
+    pub(super) fn list_devices() -> Result<Vec<(String, String)>, String> {
         let mut devices = Vec::new();
 
         let entries = fs::read_dir(CH34X_DEVICE_DIR)
@@ -496,56 +639,85 @@ mod linux_api {
             let entry = entry.map_err(|err| format!("Failed to inspect /dev entry: {}", err))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let Some(index) = parse_device_index(&name) else {
+            let Some(path) = candidate_device_path(&name) else {
                 continue;
             };
 
-            let path = device_path_from_index(index);
-            let fd = match open_device_path(&path) {
-                Ok(fd) => fd,
+            let (fd, kind) = match open_bridge_path(&path) {
+                Ok(opened) => opened,
                 Err(err) => {
-                    log::warn!("Skipping {} while scanning CH347F devices: {}", path, err);
+                    log::warn!(
+                        "Skipping {} while scanning CH34x/CH347 devices: {}",
+                        path,
+                        err
+                    );
                     continue;
                 }
             };
 
             let description = format_device_description(fd, &path);
-            close_device(fd);
-            devices.push((index, description));
+            close_device(kind, fd);
+            devices.push((path, description));
         }
 
-        devices.sort_by_key(|(index, _)| *index);
+        devices.sort_by(|(left, _), (right, _)| left.cmp(right));
+        devices.dedup_by(|(left, _), (right, _)| left == right);
         Ok(devices)
     }
 
-    pub(super) fn open_i2c(index: u32, clock_hz: u32) -> Result<(i32, String), String> {
-        let path = device_path_from_index(index);
-        let fd = open_device_path(&path)?;
+    pub(super) fn open_i2c(
+        selector: &str,
+        clock_hz: u32,
+    ) -> Result<(i32, BridgeKind, String), String> {
+        let path = device_path_from_selector(selector)?;
+        let (fd, kind) = open_bridge_path(&path)?;
 
         if !unsafe { CH34xSetTimeout(fd, DEFAULT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS) } {
-            close_device(fd);
-            return Err(format!("Failed to set CH347F timeouts on {}", path));
+            close_device(kind, fd);
+            return Err(format!("Failed to set CH34x/CH347 timeouts on {}", path));
         }
 
-        let mode = super::i2c_mode_for_clock(clock_hz) as c_int;
-        if !unsafe { CH347I2C_Set(fd, mode) } {
-            close_device(fd);
-            return Err(format!(
-                "Failed to set CH347F I2C clock to {}Hz on {}",
-                clock_hz, path
-            ));
+        match kind {
+            BridgeKind::Ch347 => {
+                let mode = super::i2c_mode_for_clock(clock_hz) as c_int;
+                if !unsafe { CH347I2C_Set(fd, mode) } {
+                    close_device(kind, fd);
+                    return Err(format!(
+                        "Failed to set CH347 I2C clock to {}Hz on {}",
+                        clock_hz, path
+                    ));
+                }
+            }
+            BridgeKind::Ch34x => {
+                let mode = ch34x_i2c_mode_for_clock(clock_hz) as c_int;
+                if !unsafe { CH34xSetStream(fd, mode) } {
+                    close_device(kind, fd);
+                    return Err(format!(
+                        "Failed to set CH341/CH34x I2C clock to {}Hz on {}",
+                        clock_hz, path
+                    ));
+                }
+            }
         }
 
-        Ok((fd, path))
+        Ok((fd, kind, path))
     }
 
-    pub(super) fn close_device(fd: i32) {
+    pub(super) fn close_device(kind: BridgeKind, fd: i32) {
         unsafe {
-            let _ = CH347CloseDevice(fd);
+            match kind {
+                BridgeKind::Ch347 => {
+                    let _ = CH347CloseDevice(fd);
+                }
+                BridgeKind::Ch34x => {
+                    let _ = CH34xCloseDevice(fd);
+                }
+            }
         }
     }
 
     pub(super) fn stream_i2c(
+        kind: BridgeKind,
         fd: i32,
         write_buf: &mut [u8],
         read_buf: Option<&mut [u8]>,
@@ -554,23 +726,41 @@ mod linux_api {
         let read_ptr = read_buf
             .map(|buf| buf.as_mut_ptr() as *mut c_void)
             .unwrap_or(std::ptr::null_mut());
-        let mut ack_count: c_int = 0;
 
-        let ok = unsafe {
-            CH347StreamI2C_RetAck(
-                fd,
-                write_buf.len() as c_int,
-                write_buf.as_mut_ptr() as *mut c_void,
-                read_len,
-                read_ptr,
-                &mut ack_count,
-            )
-        };
-        if !ok {
-            return Err("CH347StreamI2C_RetAck returned failure".to_string());
+        match kind {
+            BridgeKind::Ch347 => {
+                let mut ack_count: c_int = 0;
+                let ok = unsafe {
+                    CH347StreamI2C_RetAck(
+                        fd,
+                        write_buf.len() as c_int,
+                        write_buf.as_mut_ptr() as *mut c_void,
+                        read_len,
+                        read_ptr,
+                        &mut ack_count,
+                    )
+                };
+                if !ok {
+                    return Err("CH347StreamI2C_RetAck returned failure".to_string());
+                }
+                Ok(Some(ack_count as u32))
+            }
+            BridgeKind::Ch34x => {
+                let ok = unsafe {
+                    CH34xStreamI2C(
+                        fd,
+                        write_buf.len() as c_int,
+                        write_buf.as_mut_ptr() as *mut c_void,
+                        read_len,
+                        read_ptr,
+                    )
+                };
+                if !ok {
+                    return Err("CH34xStreamI2C returned failure".to_string());
+                }
+                Ok(None)
+            }
         }
-
-        Ok(Some(ack_count as u32))
     }
 
     fn format_device_description(fd: i32, path: &str) -> String {
@@ -588,19 +778,23 @@ mod linux_api {
     }
 
     fn detect_chip_name(fd: i32) -> Option<String> {
+        detect_chip_type(fd).map(|chip_type| {
+            match chip_type {
+                0 => "CH341 bridge",
+                1 => "CH347T bridge",
+                2 => "CH347F bridge",
+                3 => "CH339W bridge",
+                4 => "CH346C bridge",
+                _ => "CH34x bridge",
+            }
+            .to_string()
+        })
+    }
+
+    fn detect_chip_type(fd: i32) -> Option<c_int> {
         let mut chip_type: c_int = 0;
         if unsafe { CH34x_GetChipType(fd, &mut chip_type) } {
-            Some(
-                match chip_type {
-                    0 => "CH341 bridge",
-                    1 => "CH347T bridge",
-                    2 => "CH347F bridge",
-                    3 => "CH339W bridge",
-                    4 => "CH346C bridge",
-                    _ => "CH34x bridge",
-                }
-                .to_string(),
-            )
+            Some(chip_type)
         } else {
             None
         }
@@ -630,36 +824,119 @@ mod linux_api {
         }
     }
 
-    fn device_path_from_index(index: u32) -> String {
-        format!("{}/{}{}", CH34X_DEVICE_DIR, CH34X_DEVICE_PREFIX, index)
+    fn candidate_device_path(name: &str) -> Option<String> {
+        if parse_prefixed_index(name, CH34X_DEVICE_PREFIX).is_some()
+            || parse_prefixed_index(name, HIDRAW_DEVICE_PREFIX).is_some()
+        {
+            Some(format!("{}/{}", CH34X_DEVICE_DIR, name))
+        } else {
+            None
+        }
     }
 
-    fn open_device_path(path: &str) -> Result<i32, String> {
+    fn device_path_from_selector(selector: &str) -> Result<String, String> {
+        if selector.starts_with('/') {
+            return Ok(selector.to_string());
+        }
+
+        if let Ok(index) = selector.parse::<u32>() {
+            return Ok(format!(
+                "{}/{}{}",
+                CH34X_DEVICE_DIR, CH34X_DEVICE_PREFIX, index
+            ));
+        }
+
+        Err(format!("Invalid CH34x/CH347 selector: {}", selector))
+    }
+
+    fn open_bridge_path(path: &str) -> Result<(i32, BridgeKind), String> {
         if !Path::new(path).exists() {
             return Err(format!("{} does not exist", path));
         }
 
+        let ch347_err = match open_ch347_path(path) {
+            Ok(fd) => return Ok((fd, BridgeKind::Ch347)),
+            Err(err) => err,
+        };
+
+        match open_ch34x_path(path) {
+            Ok(fd) => Ok((fd, BridgeKind::Ch34x)),
+            Err(ch34x_err) => Err(format!("{}; {}", ch347_err, ch34x_err)),
+        }
+    }
+
+    fn open_ch347_path(path: &str) -> Result<i32, String> {
         let c_path = CString::new(path.as_bytes())
             .map_err(|_| format!("{} contains an unexpected NUL byte", path))?;
         let fd = unsafe { CH347OpenDevice(c_path.as_ptr()) };
         if fd < 0 {
             return Err(format!("CH347OpenDevice failed for {}", path));
         }
+
+        match detect_chip_type(fd) {
+            Some(0) => {
+                close_device(BridgeKind::Ch347, fd);
+                return Err(format!("{} is CH341/CH34x, not CH347", path));
+            }
+            Some(1..=4) => {}
+            Some(other) => {
+                close_device(BridgeKind::Ch347, fd);
+                return Err(format!(
+                    "{} reported unsupported CH34x chip type {}",
+                    path, other
+                ));
+            }
+            None if path.contains(HIDRAW_DEVICE_PREFIX) => {}
+            None => {
+                close_device(BridgeKind::Ch347, fd);
+                return Err(format!("{} did not report a CH347 chip type", path));
+            }
+        }
+
         Ok(fd)
     }
 
-    fn parse_device_index(name: &str) -> Option<u32> {
-        let suffix = name.strip_prefix(CH34X_DEVICE_PREFIX)?;
+    fn open_ch34x_path(path: &str) -> Result<i32, String> {
+        let c_path = CString::new(path.as_bytes())
+            .map_err(|_| format!("{} contains an unexpected NUL byte", path))?;
+        let fd = unsafe { CH34xOpenDevice(c_path.as_ptr()) };
+        if fd < 0 {
+            return Err(format!("CH34xOpenDevice failed for {}", path));
+        }
+        Ok(fd)
+    }
+
+    fn parse_prefixed_index(name: &str, prefix: &str) -> Option<u32> {
+        let suffix = name.strip_prefix(prefix)?;
         suffix.parse().ok()
     }
 
+    fn ch34x_i2c_mode_for_clock(clock_hz: u32) -> u8 {
+        match clock_hz {
+            0..=35_000 => 0x00,
+            35_001..=150_000 => 0x01,
+            150_001..=600_000 => 0x02,
+            _ => 0x03,
+        }
+    }
+
     unsafe extern "C" {
+        fn CH34xOpenDevice(pathname: *const c_char) -> c_int;
+        fn CH34xCloseDevice(fd: c_int) -> bool;
         fn CH347OpenDevice(pathname: *const c_char) -> c_int;
         fn CH347CloseDevice(fd: c_int) -> bool;
         fn CH34xSetTimeout(fd: c_int, write_timeout: u32, read_timeout: u32) -> bool;
         fn CH34x_GetDriverVersion(fd: c_int, version: *mut c_uchar) -> bool;
         fn CH34x_GetChipType(fd: c_int, chip_type: *mut c_int) -> bool;
         fn CH34X_GetDeviceID(fd: c_int, id: *mut u32) -> bool;
+        fn CH34xSetStream(fd: c_int, mode: c_int) -> bool;
+        fn CH34xStreamI2C(
+            fd: c_int,
+            write_length: c_int,
+            write_buffer: *mut c_void,
+            read_length: c_int,
+            read_buffer: *mut c_void,
+        ) -> bool;
         fn CH347I2C_Set(fd: c_int, mode: c_int) -> bool;
         fn CH347StreamI2C_RetAck(
             fd: c_int,

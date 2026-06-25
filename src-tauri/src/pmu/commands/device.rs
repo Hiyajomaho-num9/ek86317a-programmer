@@ -21,6 +21,12 @@ const CH347F_BRIDGE_PREFIX: &str = "bridge:ch347f:";
 const MOCK_BRIDGE_ID: &str = "bridge:mock:development";
 
 fn parse_bridge_index(prefix: &str, device_id: &str) -> Result<u32, String> {
+    parse_bridge_selector(prefix, device_id)?
+        .parse()
+        .map_err(|_| format!("Invalid device ID: {}", device_id))
+}
+
+fn parse_bridge_selector(prefix: &str, device_id: &str) -> Result<String, String> {
     let parts: Vec<&str> = device_id.splitn(4, ':').collect();
     if !device_id.starts_with(prefix) {
         return Err(format!(
@@ -31,7 +37,8 @@ fn parse_bridge_index(prefix: &str, device_id: &str) -> Result<u32, String> {
 
     parts
         .get(2)
-        .and_then(|s| s.parse().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| (*s).to_string())
         .ok_or_else(|| format!("Invalid device ID: {}", device_id))
 }
 
@@ -62,14 +69,14 @@ pub async fn scan_devices() -> Result<Vec<String>, String> {
         {
             match Ch347I2cBus::list_devices() {
                 Ok(ch347_devices) => {
-                    for (idx, desc) in &ch347_devices {
-                        let id = format!("{}{}:{}", CH347F_BRIDGE_PREFIX, idx, desc);
-                        log::info!("Found CH347F bridge: {}", id);
+                    for (selector, desc) in &ch347_devices {
+                        let id = format!("{}{}:{}", CH347F_BRIDGE_PREFIX, selector, desc);
+                        log::info!("Found CH34x/CH347 bridge: {}", id);
                         devices.push(id);
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to enumerate CH347F bridges: {}", e);
+                    log::warn!("Failed to enumerate CH34x/CH347 bridges: {}", e);
                 }
             }
         }
@@ -122,14 +129,14 @@ pub async fn connect_device(
         } else if device_id.starts_with(CH347F_BRIDGE_PREFIX) {
             #[cfg(feature = "ch347f")]
             {
-                let index = parse_bridge_index(CH347F_BRIDGE_PREFIX, &device_id)?;
+                let selector = parse_bridge_selector(CH347F_BRIDGE_PREFIX, &device_id)?;
                 log::info!(
-                    "Opening CH347F bridge index={}, clock={}Hz",
-                    index,
+                    "Opening CH34x/CH347 bridge selector={}, clock={}Hz",
+                    selector,
                     clock_hz
                 );
-                let ch347_bus = Ch347I2cBus::open(index, clock_hz)
-                    .map_err(|e| format!("Failed to open CH347F bridge: {}", e))?;
+                let ch347_bus = Ch347I2cBus::open(&selector, clock_hz)
+                    .map_err(|e| format!("Failed to open CH34x/CH347 bridge: {}", e))?;
                 Box::new(ch347_bus)
             }
             #[cfg(not(feature = "ch347f"))]
@@ -231,7 +238,9 @@ pub async fn detect_ic(state: State<'_, DeviceState>) -> Result<DeviceInfo, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_bridge_index, CH347F_BRIDGE_PREFIX, FT232H_BRIDGE_PREFIX};
+    use super::{
+        parse_bridge_index, parse_bridge_selector, CH347F_BRIDGE_PREFIX, FT232H_BRIDGE_PREFIX,
+    };
 
     #[test]
     fn parses_ft232h_bridge_index() {
@@ -246,6 +255,15 @@ mod tests {
         assert_eq!(
             parse_bridge_index(CH347F_BRIDGE_PREFIX, "bridge:ch347f:5:bridge").unwrap(),
             5
+        );
+    }
+
+    #[test]
+    fn parses_ch347_bridge_selector_path() {
+        assert_eq!(
+            parse_bridge_selector(CH347F_BRIDGE_PREFIX, "bridge:ch347f:/dev/hidraw0:bridge")
+                .unwrap(),
+            "/dev/hidraw0"
         );
     }
 }

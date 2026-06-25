@@ -24,7 +24,7 @@ env_logger = "0.11"
 libftd2xx = { version = "0.32", features = ["static"], optional = true }
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "all-bridges"]
 custom-protocol = ["tauri/custom-protocol"]
 ft232h = ["libftd2xx"]
 ch347f = []

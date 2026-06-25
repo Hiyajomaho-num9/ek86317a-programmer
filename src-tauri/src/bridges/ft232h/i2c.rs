@@ -235,13 +235,60 @@ impl I2cBus for MockI2cBus {
 
 #[cfg(feature = "ft232h")]
 use libftd2xx::{
-    ClockBitsIn, ClockBitsOut, ClockDataOut, DeviceType, Ft232h, Ftdi, FtdiCommon, FtdiMpsse,
+    BitMode, ClockBitsIn, ClockBitsOut, ClockDataOut, DeviceType, Ftdi, FtdiCommon,
     MpsseCmdBuilder, MpsseSettings,
 };
 
 #[cfg(feature = "ft232h")]
 pub struct Ft232hI2cBus {
-    device: Ft232h,
+    device: Ftdi,
+    device_type: DeviceType,
+}
+
+#[cfg(feature = "ft232h")]
+fn is_supported_ftdi_bridge(device_type: DeviceType) -> bool {
+    matches!(
+        device_type,
+        DeviceType::FT232H
+            | DeviceType::FT2232H
+            | DeviceType::FT2232C
+            | DeviceType::FT4232H
+            | DeviceType::FT4232HA
+    )
+}
+
+#[cfg(feature = "ft232h")]
+fn supports_3phase_clocking(device_type: DeviceType) -> bool {
+    matches!(
+        device_type,
+        DeviceType::FT232H | DeviceType::FT2232H | DeviceType::FT4232H | DeviceType::FT4232HA
+    )
+}
+
+#[cfg(feature = "ft232h")]
+fn clock_divisor(device_type: DeviceType, frequency: u32) -> Result<(u32, Option<bool>), String> {
+    let max = match device_type {
+        DeviceType::FT2232C => 6_000_000,
+        DeviceType::FT232H | DeviceType::FT2232H | DeviceType::FT4232H | DeviceType::FT4232HA => {
+            30_000_000
+        }
+        _ => return Err(format!("Unsupported FTDI bridge {:?}", device_type)),
+    };
+
+    if !(92..=max).contains(&frequency) {
+        return Err(format!(
+            "FTDI {:?} clock {}Hz is outside supported range 92..={}Hz",
+            device_type, frequency, max
+        ));
+    }
+
+    if device_type == DeviceType::FT2232C {
+        Ok((6_000_000 / frequency - 1, None))
+    } else if frequency <= 6_000_000 {
+        Ok((6_000_000 / frequency - 1, Some(true)))
+    } else {
+        Ok((30_000_000 / frequency - 1, Some(false)))
+    }
 }
 
 #[cfg(feature = "ft232h")]
@@ -256,45 +303,60 @@ impl Ft232hI2cBus {
             if info.port_open {
                 continue; // skip already-open devices
             }
+            if !is_supported_ftdi_bridge(info.device_type) {
+                continue;
+            }
             let desc = if info.serial_number.is_empty() && info.description.is_empty() {
-                format!("FTDI #{}", idx)
+                format!("{:?} #{}", info.device_type, idx)
             } else if info.description.is_empty() {
-                info.serial_number.clone()
+                format!("{:?} ({})", info.device_type, info.serial_number)
             } else {
-                format!("{} ({})", info.description, info.serial_number)
+                format!(
+                    "{:?} {} ({})",
+                    info.device_type, info.description, info.serial_number
+                )
             };
             result.push((idx as u32, desc));
         }
         Ok(result)
     }
 
-    /// Open a specific FT232H device by index and configure MPSSE for I2C.
+    /// Open a supported FTDI MPSSE device by index and configure it for I2C.
     pub fn open(device_index: u32, clock_hz: u32) -> Result<Self, String> {
-        // Open via Ftdi generic handle, then try_into Ft232h
-        let ftdi = Ftdi::with_index(device_index as i32)
+        let mut device = Ftdi::with_index(device_index as i32)
             .map_err(|e| format!("Failed to open FTDI #{}: {}", device_index, e))?;
-        let device: Ft232h = ftdi
-            .try_into()
-            .map_err(|e: libftd2xx::DeviceTypeError| format!("Device is not FT232H: {}", e))?;
+        let device_type = device
+            .device_type()
+            .map_err(|e| format!("Failed to identify FTDI #{}: {}", device_index, e))?;
+        if !is_supported_ftdi_bridge(device_type) {
+            return Err(format!(
+                "Unsupported FTDI bridge {:?}; supported: FT232H, FT2232H, FT2232C, FT4232H/HA",
+                device_type
+            ));
+        }
 
-        let mut bus = Self { device };
+        let mut bus = Self {
+            device,
+            device_type,
+        };
         bus.init_i2c(clock_hz)?;
         Ok(bus)
     }
 
     fn init_i2c(&mut self, clock_hz: u32) -> Result<(), String> {
-        // Use libftd2xx's built-in MPSSE initialization
         let settings = MpsseSettings {
             clock_frequency: Some(clock_hz),
             ..MpsseSettings::default()
         };
-        self.device
-            .initialize_mpsse(&settings)
+        self.initialize_mpsse(&settings)
             .map_err(|e| format!("MPSSE init failed: {}", e))?;
 
         // Enable 3-phase data clocking for I2C compatibility
-        let cmd = MpsseCmdBuilder::new()
-            .enable_3phase_data_clocking()
+        let mut cmd = MpsseCmdBuilder::new();
+        if supports_3phase_clocking(self.device_type) {
+            cmd = cmd.enable_3phase_data_clocking();
+        }
+        let cmd = cmd
             // Set initial pin state: SCL=1(AD0), SDA=1(AD1), AD2=input
             .set_gpio_lower(0x03, 0x03)
             .send_immediate();
@@ -306,8 +368,86 @@ impl Ft232hI2cBus {
         // Perform bus recovery to free any stuck slaves
         self.bus_recovery()?;
 
-        log::info!("FT232H MPSSE I2C initialized: clock_hz={}", clock_hz);
+        log::info!(
+            "FTDI {:?} MPSSE I2C initialized: clock_hz={}",
+            self.device_type,
+            clock_hz
+        );
         Ok(())
+    }
+
+    fn initialize_mpsse(&mut self, settings: &MpsseSettings) -> Result<(), String> {
+        if settings.reset {
+            self.device
+                .reset()
+                .map_err(|e| format!("FTDI reset failed: {}", e))?;
+        }
+        self.device
+            .purge_rx()
+            .map_err(|e| format!("FTDI RX purge failed: {}", e))?;
+        self.device
+            .set_usb_parameters(settings.in_transfer_size)
+            .map_err(|e| format!("FTDI USB parameter setup failed: {}", e))?;
+        self.device
+            .set_chars(0, false, 0, false)
+            .map_err(|e| format!("FTDI char setup failed: {}", e))?;
+        self.device
+            .set_timeouts(settings.read_timeout, settings.write_timeout)
+            .map_err(|e| format!("FTDI timeout setup failed: {}", e))?;
+        self.device
+            .set_latency_timer(settings.latency_timer)
+            .map_err(|e| format!("FTDI latency setup failed: {}", e))?;
+        self.device
+            .set_flow_control_rts_cts()
+            .map_err(|e| format!("FTDI flow-control setup failed: {}", e))?;
+        self.device
+            .set_bit_mode(0x00, BitMode::Reset)
+            .map_err(|e| format!("FTDI bit-mode reset failed: {}", e))?;
+        self.device
+            .set_bit_mode(settings.mask, BitMode::Mpsse)
+            .map_err(|e| format!("FTDI MPSSE mode setup failed: {}", e))?;
+        self.device
+            .write_all(MpsseCmdBuilder::new().enable_loopback().as_slice())
+            .map_err(|e| format!("FTDI loopback enable failed: {}", e))?;
+        self.synchronize_mpsse()?;
+        self.device
+            .write_all(MpsseCmdBuilder::new().disable_loopback().as_slice())
+            .map_err(|e| format!("FTDI loopback disable failed: {}", e))?;
+
+        if let Some(frequency) = settings.clock_frequency {
+            self.set_clock(frequency)?;
+        }
+
+        Ok(())
+    }
+
+    fn synchronize_mpsse(&mut self) -> Result<(), String> {
+        const ECHO_CMD: u8 = 0xAB;
+
+        self.device
+            .purge_rx()
+            .map_err(|e| format!("FTDI sync purge failed: {}", e))?;
+        self.device
+            .write_all(&[ECHO_CMD])
+            .map_err(|e| format!("FTDI sync write failed: {}", e))?;
+
+        let mut buf = [0u8; 2];
+        self.device
+            .read_all(&mut buf)
+            .map_err(|e| format!("FTDI sync read failed: {}", e))?;
+        if buf == [0xFA, ECHO_CMD] {
+            Ok(())
+        } else {
+            Err(format!("FTDI MPSSE sync returned {:02X?}", buf))
+        }
+    }
+
+    fn set_clock(&mut self, frequency: u32) -> Result<(), String> {
+        let (divisor, clkdiv) = clock_divisor(self.device_type, frequency)?;
+        let cmd = MpsseCmdBuilder::new().set_clock(divisor, clkdiv);
+        self.device
+            .write_all(cmd.as_slice())
+            .map_err(|e| format!("Failed to set FTDI clock to {}Hz: {}", frequency, e))
     }
 
     /// I2C bus recovery: toggle SCL 9 times with SDA released, then STOP.
@@ -511,5 +651,20 @@ impl I2cBus for Ft232hI2cBus {
 
         self.i2c_stop()?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "ft232h"))]
+mod ftdi_tests {
+    use super::{clock_divisor, is_supported_ftdi_bridge};
+    use libftd2xx::DeviceType;
+
+    #[test]
+    fn accepts_ft2232c_mpsse_bridge() {
+        assert!(is_supported_ftdi_bridge(DeviceType::FT2232C));
+        assert_eq!(
+            clock_divisor(DeviceType::FT2232C, 100_000).unwrap(),
+            (59, None)
+        );
     }
 }
