@@ -5,10 +5,10 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::bridges::ch347f::Ch347I2cBus;
-#[cfg(feature = "ft232h")]
-use crate::bridges::ft232h::Ft232hI2cBus;
+#[cfg(feature = "ftdi")]
+use crate::bridges::ftdi::FtdiI2cBus;
 #[cfg(debug_assertions)]
-use crate::bridges::ft232h::MockI2cBus;
+use crate::bridges::ftdi::MockI2cBus;
 use crate::bridges::I2cBus;
 use crate::error::AppError;
 use crate::pmu::chip::{spec_for_model, ChipModel};
@@ -16,7 +16,7 @@ use crate::pmu::device::ChipDevice;
 
 use super::{DeviceInfo, DeviceState};
 
-const FT232H_BRIDGE_PREFIX: &str = "bridge:ft232h:";
+const FTDI_BRIDGE_PREFIX: &str = "bridge:ftdi:";
 const CH347F_BRIDGE_PREFIX: &str = "bridge:ch347f:";
 const MOCK_BRIDGE_ID: &str = "bridge:mock:development";
 
@@ -49,18 +49,18 @@ pub async fn scan_devices() -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(|| {
         let mut devices = Vec::new();
 
-        #[cfg(feature = "ft232h")]
+        #[cfg(feature = "ftdi")]
         {
-            match Ft232hI2cBus::list_devices() {
+            match FtdiI2cBus::list_devices() {
                 Ok(ftdi_devices) => {
                     for (idx, desc) in &ftdi_devices {
-                        let id = format!("{}{}:{}", FT232H_BRIDGE_PREFIX, idx, desc);
-                        log::info!("Found FT232H bridge: {}", id);
+                        let id = format!("{}{}:{}", FTDI_BRIDGE_PREFIX, idx, desc);
+                        log::info!("Found FTDI bridge: {}", id);
                         devices.push(id);
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to enumerate FT232H bridges: {}", e);
+                    log::warn!("Failed to enumerate FTDI bridges: {}", e);
                 }
             }
         }
@@ -106,24 +106,19 @@ pub async fn connect_device(
     let device_handle = Arc::clone(&state.device);
 
     tokio::task::spawn_blocking(move || {
-        let bus: Box<dyn I2cBus> = if device_id.starts_with(FT232H_BRIDGE_PREFIX) {
-            #[cfg(feature = "ft232h")]
+        let bus: Box<dyn I2cBus> = if device_id.starts_with(FTDI_BRIDGE_PREFIX) {
+            #[cfg(feature = "ftdi")]
             {
-                let index = parse_bridge_index(FT232H_BRIDGE_PREFIX, &device_id)?;
-                log::info!(
-                    "Opening FT232H bridge index={}, clock={}Hz",
-                    index,
-                    clock_hz
-                );
-                let ft_bus = Ft232hI2cBus::open(index, clock_hz)
-                    .map_err(|e| format!("Failed to open FT232H bridge: {}", e))?;
+                let index = parse_bridge_index(FTDI_BRIDGE_PREFIX, &device_id)?;
+                log::info!("Opening FTDI bridge index={}, clock={}Hz", index, clock_hz);
+                let ft_bus = FtdiI2cBus::open(index, clock_hz)
+                    .map_err(|e| format!("Failed to open FTDI bridge: {}", e))?;
                 Box::new(ft_bus)
             }
-            #[cfg(not(feature = "ft232h"))]
+            #[cfg(not(feature = "ftdi"))]
             {
                 return Err(
-                    "FT232H bridge support not compiled in. Rebuild with --features ft232h"
-                        .to_string(),
+                    "FTDI bridge support not compiled in. Rebuild with --features ftdi".to_string(),
                 );
             }
         } else if device_id.starts_with(CH347F_BRIDGE_PREFIX) {
@@ -239,13 +234,13 @@ pub async fn detect_ic(state: State<'_, DeviceState>) -> Result<DeviceInfo, Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_bridge_index, parse_bridge_selector, CH347F_BRIDGE_PREFIX, FT232H_BRIDGE_PREFIX,
+        parse_bridge_index, parse_bridge_selector, CH347F_BRIDGE_PREFIX, FTDI_BRIDGE_PREFIX,
     };
 
     #[test]
-    fn parses_ft232h_bridge_index() {
+    fn parses_ftdi_bridge_index() {
         assert_eq!(
-            parse_bridge_index(FT232H_BRIDGE_PREFIX, "bridge:ft232h:3:demo").unwrap(),
+            parse_bridge_index(FTDI_BRIDGE_PREFIX, "bridge:ftdi:3:demo").unwrap(),
             3
         );
     }

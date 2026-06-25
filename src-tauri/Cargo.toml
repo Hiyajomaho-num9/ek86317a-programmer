@@ -1,7 +1,7 @@
 [package]
 name = "ek86317a-programmer"
 version = "0.4.0"
-description = "EK86317A TCON Programmer via FT232H I2C"
+description = "EK86317A TCON Programmer via FTDI/WCH I2C bridges"
 authors = ["you"]
 edition = "2021"
 
@@ -26,9 +26,9 @@ libftd2xx = { version = "0.32", features = ["static"], optional = true }
 [features]
 default = ["custom-protocol", "all-bridges"]
 custom-protocol = ["tauri/custom-protocol"]
-ft232h = ["libftd2xx"]
+ftdi = ["libftd2xx"]
 ch347f = []
-all-bridges = ["ft232h", "ch347f"]
+all-bridges = ["ftdi", "ch347f"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 libloading = "0.8"

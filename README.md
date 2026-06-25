@@ -56,7 +56,7 @@ npm install
 npm run tauri dev
 ```
 
-注：Debug 构建下如果没有检测到真实桥接器，会自动生成 `Mock FT232H (development)` 设备。
+注：Debug 构建下如果没有检测到真实桥接器，会自动生成 `Mock FTDI (development)` 设备。
 
 ## 编译打包
 

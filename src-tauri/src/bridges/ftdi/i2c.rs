@@ -1,8 +1,8 @@
-//! FT232H bridge implementations.
+//! FTDI bridge implementations.
 //!
 //! - `MockI2cBus`: development-only PMU simulator that satisfies the shared
 //!   bridge trait
-//! - `Ft232hI2cBus`: real FT232H hardware backend (feature-gated)
+//! - `FtdiI2cBus`: real FTDI hardware backend (feature-gated)
 
 use std::collections::HashMap;
 
@@ -230,22 +230,22 @@ impl I2cBus for MockI2cBus {
 }
 
 // ============================================================================
-// FT232H I2C Bus (conditional compilation)
+// FTDI I2C Bus (conditional compilation)
 // ============================================================================
 
-#[cfg(feature = "ft232h")]
+#[cfg(feature = "ftdi")]
 use libftd2xx::{
     BitMode, ClockBitsIn, ClockBitsOut, ClockDataOut, DeviceType, Ftdi, FtdiCommon,
     MpsseCmdBuilder, MpsseSettings,
 };
 
-#[cfg(feature = "ft232h")]
-pub struct Ft232hI2cBus {
+#[cfg(feature = "ftdi")]
+pub struct FtdiI2cBus {
     device: Ftdi,
     device_type: DeviceType,
 }
 
-#[cfg(feature = "ft232h")]
+#[cfg(feature = "ftdi")]
 fn is_supported_ftdi_bridge(device_type: DeviceType) -> bool {
     matches!(
         device_type,
@@ -257,7 +257,7 @@ fn is_supported_ftdi_bridge(device_type: DeviceType) -> bool {
     )
 }
 
-#[cfg(feature = "ft232h")]
+#[cfg(feature = "ftdi")]
 fn supports_3phase_clocking(device_type: DeviceType) -> bool {
     matches!(
         device_type,
@@ -265,7 +265,7 @@ fn supports_3phase_clocking(device_type: DeviceType) -> bool {
     )
 }
 
-#[cfg(feature = "ft232h")]
+#[cfg(feature = "ftdi")]
 fn clock_divisor(device_type: DeviceType, frequency: u32) -> Result<(u32, Option<bool>), String> {
     let max = match device_type {
         DeviceType::FT2232C => 6_000_000,
@@ -291,8 +291,8 @@ fn clock_divisor(device_type: DeviceType, frequency: u32) -> Result<(u32, Option
     }
 }
 
-#[cfg(feature = "ft232h")]
-impl Ft232hI2cBus {
+#[cfg(feature = "ftdi")]
+impl FtdiI2cBus {
     /// List all connected FTDI devices, returning (index, serial_number, description) tuples.
     /// Only lists devices that are not already open.
     pub fn list_devices() -> Result<Vec<(u32, String)>, String> {
@@ -576,16 +576,16 @@ impl Ft232hI2cBus {
     }
 }
 
-#[cfg(feature = "ft232h")]
-impl Drop for Ft232hI2cBus {
+#[cfg(feature = "ftdi")]
+impl Drop for FtdiI2cBus {
     fn drop(&mut self) {
         let _ = self.release_i2c_bus();
         let _ = self.device.set_bit_mode(0x00, BitMode::Reset);
     }
 }
 
-#[cfg(feature = "ft232h")]
-impl I2cBus for Ft232hI2cBus {
+#[cfg(feature = "ftdi")]
+impl I2cBus for FtdiI2cBus {
     fn write(&mut self, addr: u8, data: &[u8]) -> Result<(), String> {
         let result = (|| {
             self.i2c_start()?;
@@ -611,7 +611,7 @@ impl I2cBus for Ft232hI2cBus {
     }
 
     fn bus_recovery(&mut self) -> Result<(), String> {
-        Ft232hI2cBus::bus_recovery(self)
+        FtdiI2cBus::bus_recovery(self)
     }
 
     fn read(&mut self, addr: u8, buf: &mut [u8]) -> Result<(), String> {
@@ -690,7 +690,7 @@ impl I2cBus for Ft232hI2cBus {
     }
 }
 
-#[cfg(all(test, feature = "ft232h"))]
+#[cfg(all(test, feature = "ftdi"))]
 mod ftdi_tests {
     use super::{clock_divisor, is_supported_ftdi_bridge};
     use libftd2xx::DeviceType;
