@@ -179,9 +179,23 @@ impl I2cBus for Ch347I2cBus {
     }
 
     fn bus_recovery(&mut self) -> Result<(), String> {
+        // CH347/CH341 I2C is driven by a dedicated hardware engine
+        // (CH347StreamI2C / CH34xStreamI2C). Unlike FTDI MPSSE, there is no
+        // way to bit-bang SCL/SDA directly — the pins are owned by the I2C
+        // peripheral while the interface is active. The SDK does expose
+        // CH347GPIO_Set/Get, but those operate on a separate GPIO bank that
+        // cannot override the I2C pins mid-transaction.
+        //
+        // Consequently we cannot emit the 9-clock SCL recovery sequence that
+        // the FTDI backend uses. In practice the CH347 hardware engine
+        // generates a STOP condition at the end of every failed stream, which
+        // is usually sufficient to release a stuck slave. We log once at debug
+        // level so the no-op is visible in verbose logs without spamming the
+        // default log level.
         if !self.bus_recovery_logged {
-            log::warn!(
-                "CH347F bus recovery is currently a no-op; continuing without manual SCL recovery pulses"
+            log::debug!(
+                "CH347F bus recovery is a no-op (hardware I2C engine manages STOP); \
+                 skipping manual SCL recovery pulses"
             );
             self.bus_recovery_logged = true;
         }

@@ -20,6 +20,14 @@ const FTDI_BRIDGE_PREFIX: &str = "bridge:ftdi:";
 const CH347F_BRIDGE_PREFIX: &str = "bridge:ch347f:";
 const MOCK_BRIDGE_ID: &str = "bridge:mock:development";
 
+/// Parse the numeric bridge index from a device ID string.
+///
+/// Only called from the FTDI bridge path (which needs a numeric index) and
+/// from unit tests. Under a ch347f-only build the function has no non-test
+/// callers, so we silence the dead-code warning for that configuration
+/// rather than gating the function behind a feature flag (which would force
+/// duplicating the test module).
+#[cfg_attr(not(any(test, feature = "ftdi")), allow(dead_code))]
 fn parse_bridge_index(prefix: &str, device_id: &str) -> Result<u32, String> {
     parse_bridge_selector(prefix, device_id)?
         .parse()

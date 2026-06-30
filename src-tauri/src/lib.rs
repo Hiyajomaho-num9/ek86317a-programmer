@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 pub mod bridges;
 pub mod error;
 pub mod pmu;
