@@ -224,10 +224,27 @@ impl ChipDevice {
             .write_read(self.spec.pmic_addr, &[self.spec.avdd_reg], &mut buf)
             .is_ok();
 
-        // Do not probe the optional VCOM slave during connect. Some boards do
-        // not expose/enable 0x74, and an address-only write creates confusing
-        // NACKs on the logic analyzer without proving the PMIC is bad.
-        Ok((pmic_ok, None))
+        // Probe the optional VCOM slave (0x74 / E8-E9h) with a register read
+        // when the chip exposes one. EK86317A and iML8947K carry a separate
+        // VCOM slave and report Some(found/missing); LP6281 has no such slave
+        // (vcom_addr = None) and returns None, which the UI renders as N/A.
+        // A register read is used instead of an address-only write so a
+        // missing slave produces a clean NACK on a real transaction rather
+        // than an ambiguous empty write on the bus.
+        let vcom_detected = self.spec.vcom_addr.map(|addr| {
+            let probe_reg = self
+                .spec
+                .vcom_fault_reg
+                .or(self.spec.vcom_output_reg)
+                .or(self.spec.vcom_control_reg)
+                .unwrap_or(0x00);
+            let mut vbuf = [0u8; 1];
+            self.bus
+                .write_read(addr, &[probe_reg], &mut vbuf)
+                .is_ok()
+        });
+
+        Ok((pmic_ok, vcom_detected))
     }
 }
 
@@ -238,10 +255,30 @@ mod tests {
     use crate::pmu::chip::{spec_for_model, ChipModel};
 
     #[test]
-    fn probe_reads_pmic_and_skips_vcom_probe() {
+    fn probe_reads_pmic_and_vcom_slave_for_ek86317a() {
         let bus = Box::new(MockI2cBus::new(ChipModel::Ek86317a));
         let mut device = ChipDevice::new(bus, spec_for_model(ChipModel::Ek86317a));
 
+        // EK86317A exposes a VCOM slave at 0x74 (E8/E9h); both must be probed.
+        assert_eq!(device.probe().unwrap(), (true, Some(true)));
+    }
+
+    #[test]
+    fn probe_reads_pmic_and_vcom_slave_for_iml8947k() {
+        let bus = Box::new(MockI2cBus::new(ChipModel::Iml8947k));
+        let mut device = ChipDevice::new(bus, spec_for_model(ChipModel::Iml8947k));
+
+        // iML8947K also exposes a VCOM slave at 0x74 (E8/E9h).
+        assert_eq!(device.probe().unwrap(), (true, Some(true)));
+    }
+
+    #[test]
+    fn probe_skips_vcom_slave_for_lp6281() {
+        let bus = Box::new(MockI2cBus::new(ChipModel::Lp6281));
+        let mut device = ChipDevice::new(bus, spec_for_model(ChipModel::Lp6281));
+
+        // LP6281 has no separate VCOM slave (no E8/E9h); vcom_detected stays
+        // None and the UI renders it as N/A rather than "missing".
         assert_eq!(device.probe().unwrap(), (true, None));
     }
 }
