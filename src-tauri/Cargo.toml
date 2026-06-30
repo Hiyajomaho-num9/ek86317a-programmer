@@ -1,6 +1,6 @@
 [package]
 name = "ek86317a-programmer"
-version = "0.4.0"
+version = "0.5.0"
 description = "EK86317A TCON Programmer via FTDI/WCH I2C bridges"
 authors = ["you"]
 edition = "2021"
