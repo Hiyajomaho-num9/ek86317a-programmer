@@ -5,12 +5,14 @@ import VoltageTab from './components/voltage/VoltageTab';
 import GammaTab from './components/gamma/GammaTab';
 import ConfigTab from './components/config/ConfigTab';
 import FaultTab from './components/fault/FaultTab';
+import UartTab from './components/uart/UartTab';
 import { useDevice } from './hooks/useDevice';
 import { useRegisters } from './hooks/useRegisters';
 import { useLog } from './hooks/useLog';
 import type { DeviceInfo } from './lib/tauri-commands';
 import type { LogEntry } from './hooks/useLog';
 import type { ChipCapabilities, ChipModel } from './lib/chips';
+import type { UartConfig } from './lib/uart';
 import { getChipCapabilities } from './lib/chips';
 
 const LS_CHIP_MODEL = 'ek86317a_chipModel';
@@ -25,6 +27,8 @@ export interface AppContextType {
   setChipModel: (chipModel: ChipModel) => void;
   scan: () => Promise<string[]>;
   connect: (deviceId: string, clockHz: number, chipModel: ChipModel) => Promise<DeviceInfo>;
+  /** 用 UART（面板主芯片串口控制台）建立 PMU 会话 */
+  connectUart: (config: UartConfig, chipModel: ChipModel) => Promise<DeviceInfo>;
   disconnect: () => Promise<void>;
   detect: () => Promise<DeviceInfo>;
   dacRegisters: Map<number, number>;
@@ -53,13 +57,14 @@ export function useAppContext(): AppContextType {
   return ctx;
 }
 
-type TabId = 'voltage' | 'gamma' | 'config' | 'fault';
+type TabId = 'voltage' | 'gamma' | 'config' | 'fault' | 'uart';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'voltage', label: 'Voltage' },
   { id: 'gamma', label: 'GAMMA' },
   { id: 'config', label: 'Configuration' },
   { id: 'fault', label: 'Fault' },
+  { id: 'uart', label: 'UART Bridge' },
 ];
 
 function getInitialChipModel(): ChipModel {
@@ -93,6 +98,7 @@ function App() {
     setChipModel,
     scan: device.scan,
     connect: device.connect,
+    connectUart: device.connectUart,
     disconnect: device.disconnect,
     detect: device.detect,
     dacRegisters: registers.dacRegisters,
@@ -123,6 +129,8 @@ function App() {
         return <ConfigTab />;
       case 'fault':
         return <FaultTab />;
+      case 'uart':
+        return <UartTab />;
       default:
         return null;
     }

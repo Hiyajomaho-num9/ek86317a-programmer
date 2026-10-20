@@ -26,9 +26,10 @@
 │   ├── hooks/          # 设备/寄存器状态逻辑
 │   └── lib/            # 芯片模型、寄存器映射与 Tauri 命令封装
 ├── src-tauri/          # Rust 后端
-│   ├── src/bridges/    # 桥接器抽象与 FTDI/CH34x/CH347 实现
+│   ├── src/bridges/    # 桥接器抽象与 FTDI/CH34x/CH347/UART 实现
 │   ├── src/pmu/        # PMU 芯片族、公用协议、命令入口
 │   └── vendor/ch347/   # CH347 官方 Windows/Linux SDK 库
+├── docs/               # 说明文档（UART 桥等）
 ├── package.json
 └── vite.config.ts
 
@@ -73,6 +74,19 @@ cargo tauri build
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
+
+## UART 桥（不需要专用桥接器）
+
+面板主芯片自己就有串口控制台，里面 §i2cget§ / §i2cset§ / §i2cdetect§ 都是现成的。
+走这条路只要一根 USB-TTL，不用 FTDI/CH341A/CH347F 也能读写 PMU / VCOM。
+
+- 切到 **UART Bridge** 页 → 选串口 → **Open / Test** → **Scan Bus**
+- 需要跑完整 PMU 流程就点 **Connect as PMU**，之后 Toolbar 里所有按钮照常可用
+- **交互终端**：连着敲、Tab 补全、粘贴自动分片，调完 PMU 直接 cp 换 bin；
+  想裸读寄存器就直接敲 `i2cget -y -f 1 0x20 0x00`，不需要单独的调试面板
+
+三个必须知道的坑（toybox 语法差异、7 位 vs 8 位地址、115200 不能传文件）见
+[docs/UART-BRIDGE.md](docs/UART-BRIDGE.md)。
 
 ## 使用方法
 

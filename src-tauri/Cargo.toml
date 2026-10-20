@@ -22,13 +22,19 @@ thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
 libftd2xx = { version = "0.32", features = ["static"], optional = true }
+# default-features = false 关掉 libudev：Linux 上没有 libudev-dev 也能编，
+# 热插拔事件用不上，端口枚举照样工作。
+serialport = { version = "4", default-features = false }
+# 终端输出按原始字节回传，base64 编一下避免 JSON 数组把体积放大四倍
+base64 = "0.22"
 
 [features]
 default = ["custom-protocol", "all-bridges"]
 custom-protocol = ["tauri/custom-protocol"]
 ftdi = ["libftd2xx"]
 ch347f = []
-all-bridges = ["ftdi", "ch347f"]
+uart = []
+all-bridges = ["ftdi", "ch347f", "uart"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 libloading = "0.8"

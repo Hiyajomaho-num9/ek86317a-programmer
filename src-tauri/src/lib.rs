@@ -2,6 +2,7 @@ pub mod bridges;
 pub mod error;
 pub mod pmu;
 
+use pmu::commands::uart::UartState;
 use pmu::commands::DeviceState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -11,11 +12,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(DeviceState::new())
+        .manage(UartState::new())
         .invoke_handler(tauri::generate_handler![
             pmu::commands::device::scan_devices,
             pmu::commands::device::connect_device,
             pmu::commands::device::disconnect_device,
             pmu::commands::device::detect_ic,
+            pmu::commands::uart::uart_list_ports,
+            pmu::commands::uart::uart_open,
+            pmu::commands::uart::uart_close,
+            pmu::commands::uart::uart_scan_bus,
+            pmu::commands::uart::uart_read_register,
+            pmu::commands::uart::uart_write_register,
+            pmu::commands::uart::uart_dump,
+            pmu::commands::uart::uart_shell,
+            pmu::commands::uart::uart_term_start,
+            pmu::commands::uart::uart_term_stop,
+            pmu::commands::uart::uart_term_send,
+            pmu::commands::uart::uart_term_poll,
+            pmu::commands::uart::connect_uart_device,
             pmu::commands::register::read_dac_register,
             pmu::commands::register::write_dac_register,
             pmu::commands::register::read_all_dac,

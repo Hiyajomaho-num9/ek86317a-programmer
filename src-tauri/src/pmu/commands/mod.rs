@@ -4,6 +4,7 @@ pub mod device;
 pub mod eeprom;
 pub mod firmware;
 pub mod register;
+pub mod uart;
 
 use std::sync::{Arc, Mutex};
 
