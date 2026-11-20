@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+#[cfg(feature = "ch347f")]
 use crate::bridges::ch347f::Ch347I2cBus;
 #[cfg(feature = "ftdi")]
 use crate::bridges::ftdi::FtdiI2cBus;
@@ -14,7 +15,7 @@ use crate::error::AppError;
 use crate::pmu::chip::{spec_for_model, ChipModel};
 use crate::pmu::device::ChipDevice;
 
-use super::{DeviceInfo, DeviceState};
+use super::{DeviceConnection, DeviceInfo, DeviceState};
 
 const FTDI_BRIDGE_PREFIX: &str = "bridge:ftdi:";
 const CH347F_BRIDGE_PREFIX: &str = "bridge:ch347f:";
@@ -51,6 +52,7 @@ fn parse_bridge_selector(prefix: &str, device_id: &str) -> Result<String, String
 }
 
 #[tauri::command]
+#[allow(clippy::vec_init_then_push)] // Conditional feature blocks extend this vector.
 pub async fn scan_devices() -> Result<Vec<String>, String> {
     log::info!("Scanning available bridge devices...");
 
@@ -102,7 +104,7 @@ pub async fn scan_devices() -> Result<Vec<String>, String> {
 pub async fn connect_device(
     state: State<'_, DeviceState>,
     device_id: String,
-    clock_hz: u32,
+    #[cfg_attr(not(feature = "ftdi"), allow(unused_variables))] clock_hz: u32,
     chip_model: ChipModel,
 ) -> Result<DeviceInfo, String> {
     log::info!(
@@ -178,7 +180,10 @@ pub async fn connect_device(
         let mut guard = device_handle
             .lock()
             .map_err(|_| AppError::LockError.to_string())?;
-        *guard = Some(device);
+        *guard = Some(DeviceConnection {
+            device,
+            uart_config_key: None,
+        });
 
         log::info!(
             "Connected: chip={}, PMIC={}, VCOM={:?}",
@@ -194,16 +199,22 @@ pub async fn connect_device(
 }
 
 #[tauri::command]
-pub async fn disconnect_device(state: State<'_, DeviceState>) -> Result<(), String> {
+pub async fn disconnect_device(
+    state: State<'_, DeviceState>,
+    uart_state: State<'_, super::uart::UartState>,
+) -> Result<(), String> {
     log::info!("Disconnecting from device...");
 
     let device_handle = Arc::clone(&state.device);
+    let uart_slot = uart_state.slot();
 
     tokio::task::spawn_blocking(move || {
-        let mut guard = device_handle
-            .lock()
-            .map_err(|_| AppError::LockError.to_string())?;
-        *guard = None;
+        if DeviceState::disconnect(&device_handle)? {
+            let mut guard = uart_slot
+                .lock()
+                .map_err(|_| AppError::LockError.to_string())?;
+            *guard = None;
+        }
         Ok::<(), String>(())
     })
     .await

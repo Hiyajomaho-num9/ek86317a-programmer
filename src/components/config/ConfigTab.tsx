@@ -4,7 +4,10 @@
  * Each panel uses RegisterPanel + BitField for bit-level configuration.
  */
 
-import { useAppContext } from '../../App';
+import { useLegacyFields } from '../../context/legacy';
+import { useOperations } from '../../context/OperationsContext';
+import { useRegisterValues } from '../../context/RegistersContext';
+import { getDefaultRegisterValue } from '../../lib/register-map';
 import RegisterPanel from './RegisterPanel';
 import BitField from './BitField';
 
@@ -87,12 +90,15 @@ const XON_DIS_THR_OPTIONS = generateXonDisThrOptions();
 // ============================================================================
 
 function ConfigTab() {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
+  const { runExclusive } = useOperations();
+  const dacRegisters = useRegisterValues();
   const isLp = ctx.chipModel === 'lp6281';
   const supportsMntMode = ctx.chipCapabilities.supportsMntMode;
 
   // Helper to get register value with fallback
-  const regVal = (addr: number) => ctx.getDacValue(addr) ?? 0;
+  const regVal = (addr: number) =>
+    dacRegisters.get(addr) ?? getDefaultRegisterValue(ctx.chipModel, addr);
 
   // Helper to update register value
   const setReg = (addr: number, val: number) => ctx.setDacValue(addr, val);
@@ -108,7 +114,7 @@ function ConfigTab() {
   };
 
   // Enable All Channels handler
-  const handleEnableAll = async () => {
+  const handleEnableAll = () => { void runExclusive('Enable all channels', async () => {
     try {
       setReg(REG_CH_ON_OFF, 0xFF);
       await ctx.writeDacRegister(REG_CH_ON_OFF, 0xFF);
@@ -116,7 +122,7 @@ function ConfigTab() {
     } catch (e: unknown) {
       ctx.addLog('error', `Enable all channels failed: ${e}`);
     }
-  };
+  }); };
 
   const btnSmall = 'px-2 py-1 text-xs rounded text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 

@@ -482,7 +482,12 @@ impl UartI2cBus {
                 Err(e) => last = e,
             }
             if attempt < self.cfg.retries {
-                log::warn!("UART 命令重试 {}/{}: {}", attempt + 1, self.cfg.retries, last);
+                log::warn!(
+                    "UART 命令重试 {}/{}: {}",
+                    attempt + 1,
+                    self.cfg.retries,
+                    last
+                );
                 thread::sleep(Duration::from_millis(60));
                 let _ = self.port.clear(ClearBuffer::All);
                 let _ = self.drain(Duration::from_millis(40));
@@ -693,7 +698,12 @@ impl I2cBus for UartI2cBus {
         Ok(())
     }
 
-    fn write_read(&mut self, addr: u8, write_data: &[u8], read_buf: &mut [u8]) -> Result<(), String> {
+    fn write_read(
+        &mut self,
+        addr: u8,
+        write_data: &[u8],
+        read_buf: &mut [u8],
+    ) -> Result<(), String> {
         if write_data.is_empty() || read_buf.is_empty() {
             return Ok(());
         }
@@ -744,7 +754,12 @@ impl I2cBus for SharedUartBus {
         self.with(|bus| bus.read(addr, buf))
     }
 
-    fn write_read(&mut self, addr: u8, write_data: &[u8], read_buf: &mut [u8]) -> Result<(), String> {
+    fn write_read(
+        &mut self,
+        addr: u8,
+        write_data: &[u8],
+        read_buf: &mut [u8],
+    ) -> Result<(), String> {
         self.with(|bus| bus.write_read(addr, write_data, read_buf))
     }
 }

@@ -11,7 +11,10 @@
  */
 
 import { useState } from 'react';
-import { useAppContext } from '../../App';
+import { useLegacyFields } from '../../context/legacy';
+import { useOperations } from '../../context/OperationsContext';
+import { useRegisterValue } from '../../context/RegistersContext';
+import { getDefaultRegisterValue } from '../../lib/register-map';
 
 interface RegisterPanelProps {
   title: string;              // e.g. "Channel On/Off Set (28h)"
@@ -21,8 +24,9 @@ interface RegisterPanelProps {
 }
 
 function RegisterPanel({ title, address, children, extraButtons }: RegisterPanelProps) {
-  const ctx = useAppContext();
-  const currentValue = ctx.getDacValue(address) ?? 0;
+  const ctx = useLegacyFields();
+  const { runExclusive } = useOperations();
+  const currentValue = useRegisterValue(address) ?? getDefaultRegisterValue(ctx.chipModel, address);
 
   // Local hex input state for direct editing
   const [hexInput, setHexInput] = useState<string | null>(null);
@@ -49,23 +53,23 @@ function RegisterPanel({ title, address, children, extraButtons }: RegisterPanel
     }
   };
 
-  const handleRead = async () => {
+  const handleRead = () => runExclusive(`Read 0x${address.toString(16)}`, async () => {
     try {
       const val = await ctx.readDacRegister(address);
       ctx.addLog('info', `Read reg 0x${address.toString(16).toUpperCase()}: 0x${val.toString(16).toUpperCase().padStart(2, '0')}`);
     } catch (e: unknown) {
       ctx.addLog('error', `Read reg 0x${address.toString(16).toUpperCase()} failed: ${e}`);
     }
-  };
+  });
 
-  const handleWrite = async () => {
+  const handleWrite = () => runExclusive(`Write 0x${address.toString(16)}`, async () => {
     try {
       await ctx.writeDacRegister(address, currentValue);
       ctx.addLog('success', `Write reg 0x${address.toString(16).toUpperCase()}: 0x${currentValue.toString(16).toUpperCase().padStart(2, '0')}`);
     } catch (e: unknown) {
       ctx.addLog('error', `Write reg 0x${address.toString(16).toUpperCase()} failed: ${e}`);
     }
-  };
+  });
 
   const btnSmall = 'px-2 py-1 text-xs rounded text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useAppContext } from '../App';
+import { useLegacyFields } from '../context/legacy';
+import { useRegisterValues } from '../context/RegistersContext';
 import { CHIP_OPTIONS, getChipDisplayName, getChipStoragePrefix } from '../lib/chips';
 import { CLOCK_OPTIONS } from '../lib/register-map';
 import * as cmd from '../lib/tauri-commands';
+import { useOperations } from '../context/OperationsContext';
 
 function sanitizePanelName(name: string): string {
   return name.replace(/[\/:*?"<>|]/g, '_').trim();
@@ -38,10 +40,12 @@ const LS_EXPORT_PATH = 'ek86317a_exportPath';
 const LS_PANEL_NAME = 'ek86317a_panelName';
 
 function Toolbar() {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
+  const dacRegisters = useRegisterValues();
   const [selectedDevice, setSelectedDevice] = useState('');
   const [clockHz, setClockHz] = useState(400_000);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const { busy: globalBusy, runExclusive } = useOperations();
+  const busyAction = globalBusy;
   const [firmwarePath, setFirmwarePath] = useState('');
   const [firmwareName, setFirmwareName] = useState('');
   const [exportPath, setExportPath] = useState(() => localStorage.getItem(LS_EXPORT_PATH) ?? '');
@@ -57,15 +61,8 @@ function Toolbar() {
 
   const toolbarBusy = busyAction != null;
 
-  const runToolbarAction = async (label: string, task: () => Promise<void>) => {
-    if (toolbarBusy) return;
-    setBusyAction(label);
-    try {
-      await task();
-    } finally {
-      setBusyAction(null);
-    }
-  };
+  const runToolbarAction = (label: string, task: () => Promise<void>) =>
+    runExclusive(label, task);
 
   const handleChipChange = (value: string) => {
     if (ctx.connected || toolbarBusy) return;
@@ -199,13 +196,15 @@ function Toolbar() {
     await runToolbarAction('Verifying DAC and EEPROM...', async () => {
       try {
         const result = await cmd.verifyAll(firmwarePath);
+        const status = (partial: boolean, mismatched: boolean) => mismatched ? 'FAIL' : partial ? 'PARTIAL' : 'PASS';
+        const level = (partial: boolean, mismatched: boolean) => mismatched ? 'error' : partial ? 'warn' : 'success';
         ctx.addLog(
-          result.dac_mismatches.length === 0 ? 'success' : 'error',
-          `Verify DAC: ${result.dac_mismatches.length === 0 ? 'PASS' : 'FAIL'} (${result.dac_matched}/${result.total})`,
+          level(result.partial, result.dac_mismatches.length > 0),
+          `Verify DAC: ${status(result.partial, result.dac_mismatches.length > 0)} (${result.dac_matched}/${result.dac_compared} compared, ${result.dac_missing.length} missing)`,
         );
         ctx.addLog(
-          result.eeprom_mismatches.length === 0 ? 'success' : 'error',
-          `Verify EEPROM: ${result.eeprom_mismatches.length === 0 ? 'PASS' : 'FAIL'} (${result.eeprom_matched}/${result.total})`,
+          level(result.partial, result.eeprom_mismatches.length > 0),
+          `Verify EEPROM: ${status(result.partial, result.eeprom_mismatches.length > 0)} (${result.eeprom_matched}/${result.eeprom_compared} compared, ${result.eeprom_missing.length} missing)`,
         );
       } catch (error: unknown) {
         ctx.addLog('error', `Verify ALL failed: ${error}`);
@@ -242,7 +241,7 @@ function Toolbar() {
   const handleWriteUiToDac = async () => {
     await runToolbarAction('Writing UI registers to DAC...', async () => {
       try {
-        const regs = Array.from(ctx.dacRegisters.entries()) as [number, number][];
+        const regs = Array.from(dacRegisters.entries()) as [number, number][];
         if (regs.length === 0) {
           ctx.addLog('warn', 'No UI register data to write');
           return;
@@ -308,7 +307,7 @@ function Toolbar() {
 
     await runToolbarAction('Exporting UI to BIN...', async () => {
       try {
-        const regs = Array.from(ctx.dacRegisters.entries()) as [number, number][];
+        const regs = Array.from(dacRegisters.entries()) as [number, number][];
         await cmd.exportRegisters(fullPath, ctx.chipModel, regs);
         ctx.addLog('success', `Exported: ${fullPath}`);
       } catch (error: unknown) {
@@ -330,8 +329,9 @@ function Toolbar() {
   return (
     <div className="bg-gray-800 border-b border-gray-700 px-4 py-2 space-y-1.5">
       <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-xs text-gray-400 font-medium">Chip:</span>
+        <label className="text-xs text-gray-400 font-medium" htmlFor="toolbar-chip">Chip:</label>
         <select
+          id="toolbar-chip"
           className={selectStyle}
           value={ctx.chipModel}
           onChange={(event) => handleChipChange(event.target.value)}
@@ -342,8 +342,9 @@ function Toolbar() {
           ))}
         </select>
 
-        <span className="text-xs text-gray-400 font-medium">Devices:</span>
+        <label htmlFor="toolbar-device" className="text-xs text-gray-400 font-medium">Devices:</label>
         <select
+          id="toolbar-device"
           className={`${selectStyle} min-w-[180px]`}
           value={selectedDevice}
           onChange={(event) => setSelectedDevice(event.target.value)}

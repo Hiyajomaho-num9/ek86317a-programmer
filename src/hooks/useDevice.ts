@@ -5,74 +5,53 @@ import type { UartConfig } from '../lib/uart';
 import * as cmd from '../lib/tauri-commands';
 import { connectUartDevice, uartClose } from '../lib/uart';
 
-export function useDevice() {
+export function useDevice(chipModel: ChipModel) {
   const [connected, setConnected] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [devices, setDevices] = useState<string[]>([]);
   const [scanning, setScanning] = useState(false);
-
-  const scan = useCallback(async (): Promise<string[]> => {
+  const [uartConfig, setUartConfig] = useState<UartConfig | null>(null);
+  const scan = useCallback(async () => {
     setScanning(true);
     try {
       const result = await cmd.scanDevices();
       setDevices(result);
       return result;
-    } finally {
-      setScanning(false);
-    }
+    } finally { setScanning(false); }
   }, []);
-
-  const connect = useCallback(async (
-    deviceId: string,
-    clockHz: number,
-    chipModel: ChipModel,
-  ): Promise<DeviceInfo> => {
-    const info = await cmd.connectDevice(deviceId, clockHz, chipModel);
+  const connect = useCallback(async (deviceId: string, clockHz: number, model: ChipModel) => {
+    const info = await cmd.connectDevice(deviceId, clockHz, model);
+    setUartConfig(null);
     setDeviceInfo(info);
     setConnected(true);
     return info;
   }, []);
-
-  /**
-   * 用串口（面板主芯片的 UART 控制台）建立 PMU 会话。
-   *
-   * 走的是和 FTDI / CH347 完全相同的 ChipDevice 抽象，所以连接成功之后
-   * Toolbar 里那些 Read DAC / Write EEPROM / Verify ALL 逻辑一行都不用改。
-   */
-  const connectUart = useCallback(async (
-    config: UartConfig,
-    chipModel: ChipModel,
-  ): Promise<DeviceInfo> => {
-    const info = await connectUartDevice(config, chipModel);
+  const connectUart = useCallback(async (config: UartConfig, model: ChipModel) => {
+    const info = await connectUartDevice(config, model);
+    setUartConfig({ ...config });
     setDeviceInfo(info);
     setConnected(true);
     return info;
   }, []);
-
-  const disconnect = useCallback(async (): Promise<void> => {
-    await cmd.disconnectDevice();
-    // 串口是独占资源，断开时顺手关掉，失败无所谓（可能本来就没开）
-    try {
-      await uartClose();
-    } catch {
-      // ignore
-    }
+  const invalidatePmuConnection = useCallback(() => {
+    setUartConfig(null);
     setDeviceInfo(null);
     setConnected(false);
   }, []);
-
+  const disconnect = useCallback(async () => {
+    let failure: unknown;
+    try { await cmd.disconnectDevice(); } catch (error) { failure = error; }
+    try { await uartClose(); } catch (error) { failure ??= error; }
+    setDeviceInfo(null);
+    setUartConfig(null);
+    setConnected(false);
+    if (failure !== undefined) throw failure;
+  }, []);
   const detect = useCallback(async (): Promise<DeviceInfo> => {
     const info = await cmd.detectIc();
-    setDeviceInfo((prev) => (prev
-      ? {
-          ...prev,
-          pmic_detected: info.pmic_detected,
-          vcom_detected: info.vcom_detected,
-          chip_model: info.chip_model,
-        }
-      : info));
+    setDeviceInfo((previous) => ({ ...info, device_id: previous?.device_id ?? info.device_id }));
     return info;
   }, []);
-
-  return { connected, deviceInfo, devices, scanning, scan, connect, connectUart, disconnect, detect };
+  void chipModel;
+  return { connected, deviceInfo, devices, scanning, scan, connect, connectUart, disconnect, detect, invalidatePmuConnection, uartConfig };
 }

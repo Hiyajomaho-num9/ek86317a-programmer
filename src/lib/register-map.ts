@@ -210,7 +210,7 @@ export const CLOCK_OPTIONS: ClockOption[] = [
 
 export function getVoltageRegisters(
   chipModel: ChipModel,
-  registers: Map<number, number>,
+  registers: ReadonlyMap<number, number>,
 ): VoltageRegisterDef[] {
   const modeValue = registers.get(REG_CONFIG4) ?? getDefaultRegisterValue(chipModel, REG_CONFIG4);
   const caps = getChipCapabilities(chipModel);

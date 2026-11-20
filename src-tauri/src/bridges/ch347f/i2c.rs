@@ -178,6 +178,32 @@ impl I2cBus for Ch347I2cBus {
         Ok(())
     }
 
+    fn reports_nack(&self) -> bool {
+        #[cfg(all(feature = "ch347f", target_os = "windows"))]
+        {
+            if self.kind == windows_api::BridgeKind::Ch341 {
+                // CH341 never reports a NACK: measured against CH347DLLA64.dll,
+                // an unloaded bus still answered CH341StreamI2C / CH341ReadI2C /
+                // CH341WriteI2C with TRUE and 0xFF. Presence detection therefore
+                // compares against the floating-bus level (`pmu::detect`).
+                return ch341_trusts_stream_reply();
+            }
+            true
+        }
+
+        #[cfg(all(feature = "ch347f", target_os = "linux"))]
+        {
+            // The Linux path talks to the kernel CH34x driver; its reply
+            // semantics were not part of this investigation and stay unchanged.
+            true
+        }
+
+        #[cfg(not(all(feature = "ch347f", any(target_os = "windows", target_os = "linux"))))]
+        {
+            true
+        }
+    }
+
     fn bus_recovery(&mut self) -> Result<(), String> {
         // CH347/CH341 I2C is driven by a dedicated hardware engine
         // (CH347StreamI2C / CH34xStreamI2C). Unlike FTDI MPSSE, there is no
@@ -217,14 +243,17 @@ impl Drop for Ch347I2cBus {
     }
 }
 
+#[cfg_attr(not(any(feature = "ch347f", test)), allow(dead_code))]
 fn encode_write_addr(addr: u8) -> u8 {
     addr << 1
 }
 
+#[cfg_attr(not(any(feature = "ch347f", test)), allow(dead_code))]
 fn encode_read_addr(addr: u8) -> u8 {
     (addr << 1) | 0x01
 }
 
+#[cfg_attr(not(any(feature = "ch347f", test)), allow(dead_code))]
 fn i2c_mode_for_clock(clock_hz: u32) -> u32 {
     match clock_hz {
         0..=35_000 => 0x00,
@@ -235,6 +264,39 @@ fn i2c_mode_for_clock(clock_hz: u32) -> u32 {
         600_001..=875_000 => 0x03,
         _ => 0x06,
     }
+}
+
+// ============================================================================
+// CH341 ACK reporting
+// ============================================================================
+//
+// CH341StreamI2C only reports whether the USB transfer to the bridge chip
+// succeeded — it does not report the slave ACK. Measured against
+// CH347DLLA64.dll with nothing attached, `CH341StreamI2C`, `CH341ReadI2C` and
+// `CH341WriteI2C` all returned TRUE and handed back 0xFF from the bus pull-ups,
+// including for a reserved address that cannot hold a slave. So the CH341 path
+// declares `reports_nack() == false` and presence detection compares reads
+// against the floating-bus level instead (`pmu::detect`).
+
+/// Diagnostic switch: `EK86317A_CH341_TRUST_STREAM=1` restores the old rule
+/// ("the stream returned TRUE, so the slave is there") for comparison runs.
+#[cfg(all(feature = "ch347f", target_os = "windows"))]
+fn trust_stream_value(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+#[cfg(all(feature = "ch347f", target_os = "windows"))]
+fn ch341_trusts_stream_reply() -> bool {
+    use std::sync::OnceLock;
+
+    static TRUST: OnceLock<bool> = OnceLock::new();
+    *TRUST.get_or_init(|| match std::env::var("EK86317A_CH341_TRUST_STREAM") {
+        Ok(value) => trust_stream_value(&value),
+        Err(_) => false,
+    })
 }
 
 #[cfg(all(feature = "ch347f", target_os = "windows"))]
@@ -256,7 +318,6 @@ mod windows_api {
     type StreamI2cFn = unsafe extern "system" fn(u32, u32, *mut c_void, u32, *mut c_void) -> Bool;
     type StreamI2cRetAckFn =
         unsafe extern "system" fn(u32, u32, *mut c_void, u32, *mut c_void, *mut u32) -> Bool;
-
     #[derive(Debug, Copy, Clone, Eq, PartialEq)]
     pub(super) enum BridgeKind {
         Ch341,
@@ -369,7 +430,6 @@ mod windows_api {
                 >(&library, b"CH341SetTimeout\0");
                 let ch341_stream_i2c =
                     load_optional_symbol::<StreamI2cFn>(&library, b"CH341StreamI2C\0");
-
                 Ok(Self {
                     _library: library,
                     open_device,
@@ -982,5 +1042,25 @@ mod tests {
         assert_eq!(i2c_mode_for_clock(400_000), 0x02);
         assert_eq!(i2c_mode_for_clock(750_000), 0x03);
         assert_eq!(i2c_mode_for_clock(1_000_000), 0x06);
+    }
+
+    #[cfg(all(feature = "ch347f", target_os = "windows"))]
+    #[test]
+    fn trust_stream_escape_hatch_requires_an_explicit_on_value() {
+        use super::trust_stream_value;
+
+        // The escape hatch exists for comparison runs only; anything else must
+        // leave CH341 in "no NACK reporting" mode, which routes detection
+        // through the floating-bus comparison.
+        for value in ["1", "true", "TRUE", " yes ", "on", "On"] {
+            assert!(
+                trust_stream_value(value),
+                "{:?} must disable detection",
+                value
+            );
+        }
+        for value in ["", "0", "false", "no", "off", "anything"] {
+            assert!(!trust_stream_value(value), "{:?} must keep it on", value);
+        }
     }
 }

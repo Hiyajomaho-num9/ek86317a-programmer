@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useAppContext } from '../App';
+import { useLogContext } from '../context/LogContext';
 
 const LEVEL_STYLES: Record<string, { icon: string; color: string }> = {
   info: { icon: 'ℹ', color: 'text-blue-400' },
@@ -9,7 +9,7 @@ const LEVEL_STYLES: Record<string, { icon: string; color: string }> = {
 };
 
 function LogPanel() {
-  const { logs, clearLogs } = useAppContext();
+  const { logs, clearLogs } = useLogContext();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new logs arrive

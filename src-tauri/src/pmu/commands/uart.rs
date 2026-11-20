@@ -22,16 +22,30 @@ use crate::error::AppError;
 use crate::pmu::chip::{spec_for_model, ChipModel};
 use crate::pmu::device::ChipDevice;
 
-use super::{DeviceInfo, DeviceState};
+use super::{DeviceConnection, DeviceInfo, DeviceState, SharedDevice};
 
-/// 把会影响命令拼法的字段拼成一个指纹。
+/// 把会影响句柄、登录或命令会话的字段拼成一个无歧义指纹。
 ///
-/// 只比端口是不够的：总线号、dialect、地址位移、行尾变了，旧句柄里的
-/// `UartConfig` 就过期了，必须重开，否则 UI 改了参数却不生效。
+/// 字符串使用 Debug 转义并带引号，避免分隔符出现在配置值中时发生碰撞。
+/// 登录信息、提权和超时参数变了也必须重开，不能复用旧会话。
 fn config_key(cfg: &UartConfig) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{:?}",
-        cfg.port, cfg.baud, cfg.bus, cfg.dialect, cfg.addr_shift, cfg.line_ending
+        "port={:?};baud={};bus={};dialect={:?};addr_shift={};line_ending={:?};\
+         char_delay_ms={};timeout_ms={};retries={};settle_ms={};\
+         login_user={:?};login_pass={:?};su_mode={:?}",
+        cfg.port,
+        cfg.baud,
+        cfg.bus,
+        cfg.dialect,
+        cfg.addr_shift,
+        cfg.line_ending,
+        cfg.char_delay_ms,
+        cfg.timeout_ms,
+        cfg.retries,
+        cfg.settle_ms,
+        cfg.login_user,
+        cfg.login_pass,
+        cfg.su_mode,
     )
 }
 
@@ -42,25 +56,36 @@ pub type UartSlot = Arc<Mutex<Option<(String, SharedUartBus)>>>;
 #[derive(Default)]
 pub struct UartState {
     slot: UartSlot,
+    device: SharedDevice,
 }
 
 impl UartState {
-    pub fn new() -> Self {
+    pub fn new(device: &DeviceState) -> Self {
         Self {
             slot: Arc::new(Mutex::new(None)),
+            device: device.shared_device(),
         }
     }
 
     pub fn slot(&self) -> UartSlot {
         Arc::clone(&self.slot)
     }
+
+    fn device(&self) -> SharedDevice {
+        Arc::clone(&self.device)
+    }
 }
 
-/// 打开（或复用）串口桥。
-fn ensure_bus(slot: &UartSlot, cfg: &UartConfig) -> Result<SharedUartBus, String> {
-    let mut guard = slot.lock().map_err(|_| AppError::LockError.to_string())?;
-
+/// 打开（或复用）串口桥。配置变化先使旧 PMU 会话失效；
+/// 相同指纹的 PMU 和裸 UART 操作继续复用同一个总线。
+fn ensure_bus(
+    slot: &UartSlot,
+    device: &SharedDevice,
+    cfg: &UartConfig,
+) -> Result<SharedUartBus, String> {
     let key = config_key(cfg);
+    DeviceState::close_uart_session_if_config_changed(device, &key)?;
+    let mut guard = slot.lock().map_err(|_| AppError::LockError.to_string())?;
     if let Some((cached_key, bus)) = guard.as_ref() {
         if *cached_key == key {
             return Ok(bus.clone());
@@ -101,9 +126,10 @@ pub async fn uart_open(
     config: UartConfig,
 ) -> Result<UartOpenResult, String> {
     let slot = state.slot();
+    let device_handle = state.device();
     let path = config.port.clone();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         let (root, id_line, warning) = bus.with(|b| {
             Ok((
                 b.is_root(),
@@ -125,6 +151,7 @@ pub async fn uart_open(
 #[tauri::command]
 pub async fn uart_close(state: State<'_, UartState>) -> Result<(), String> {
     let slot = state.slot();
+    DeviceState::close_uart_session(&state.device)?;
     let mut guard = slot.lock().map_err(|_| AppError::LockError.to_string())?;
     *guard = None;
     Ok(())
@@ -139,8 +166,9 @@ pub async fn uart_scan_bus(
     last: Option<u8>,
 ) -> Result<UartScanResult, String> {
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         bus.with(|b| b.scan(first.unwrap_or(0x03), last.unwrap_or(0x77)))
     })
     .await
@@ -156,8 +184,9 @@ pub async fn uart_read_register(
     reg: u8,
 ) -> Result<u8, String> {
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         bus.with(|b| b.read_register(addr, reg))
     })
     .await
@@ -174,8 +203,9 @@ pub async fn uart_write_register(
     value: u8,
 ) -> Result<u8, String> {
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         bus.with(|b| b.write_register(addr, reg, value))
     })
     .await
@@ -191,6 +221,10 @@ pub struct UartDumpResult {
     pub values: Vec<(u8, u8)>,
 }
 
+fn uart_dump_range_is_invalid(first: u8, last: u8) -> bool {
+    last < first
+}
+
 #[tauri::command]
 pub async fn uart_dump(
     state: State<'_, UartState>,
@@ -199,12 +233,13 @@ pub async fn uart_dump(
     first: u8,
     last: u8,
 ) -> Result<UartDumpResult, String> {
-    if last < first {
+    if uart_dump_range_is_invalid(first, last) {
         return Err("结束寄存器小于起始寄存器".to_string());
     }
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         let mut values = Vec::new();
         for reg in first..=last {
             let v = bus.with(|b| b.read_register(addr, reg))?;
@@ -233,8 +268,9 @@ pub async fn uart_shell(
         return Err("命令为空".to_string());
     }
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         bus.with(|b| b.shell(&cmd))
     })
     .await
@@ -253,8 +289,9 @@ pub async fn uart_term_start(
     config: UartConfig,
 ) -> Result<(), String> {
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         bus.with(|b| {
             b.set_interactive(true);
             Ok(())
@@ -293,8 +330,9 @@ pub async fn uart_term_send(
         return Ok(());
     }
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         bus.with(|b| b.term_write(data.as_bytes()))
     })
     .await
@@ -314,8 +352,9 @@ pub async fn uart_term_poll(
 ) -> Result<String, String> {
     use base64::Engine as _;
     let slot = state.slot();
+    let device_handle = state.device();
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         let bytes = bus.with(|b| Ok(b.term_poll(max_ms.unwrap_or(60))))?;
         Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(bytes))
     })
@@ -346,7 +385,7 @@ pub async fn connect_uart_device(
     let device_id = format!("bridge:uart:{}", config.port);
 
     tokio::task::spawn_blocking(move || {
-        let bus = ensure_bus(&slot, &config)?;
+        let bus = ensure_bus(&slot, &device_handle, &config)?;
         let spec = spec_for_model(chip_model);
         let mut device = ChipDevice::new(Box::new(bus) as Box<dyn I2cBus>, spec);
 
@@ -363,7 +402,10 @@ pub async fn connect_uart_device(
         let mut guard = device_handle
             .lock()
             .map_err(|_| AppError::LockError.to_string())?;
-        *guard = Some(device);
+        *guard = Some(DeviceConnection {
+            device,
+            uart_config_key: Some(config_key(&config)),
+        });
 
         log::info!(
             "UART connected: chip={}, PMIC={}, VCOM={:?}",
@@ -405,6 +447,60 @@ mod tests {
         // 只是把边界判断的逻辑固化下来，防止 UI 传反
         let first = 0x20u8;
         let last = 0x10u8;
-        assert!(last < first);
+        assert!(uart_dump_range_is_invalid(first, last));
+    }
+
+    #[test]
+    fn config_key_distinguishes_every_session_affecting_setting() {
+        let base = UartConfig {
+            port: "COM7".to_string(),
+            ..UartConfig::default()
+        };
+        assert_eq!(config_key(&base), config_key(&base.clone()));
+
+        let mut char_delay = base.clone();
+        char_delay.char_delay_ms = 2;
+        let mut timeout = base.clone();
+        timeout.timeout_ms += 1;
+        let mut retries = base.clone();
+        retries.retries += 1;
+        let mut settle = base.clone();
+        settle.settle_ms += 1;
+        let mut login_user = base.clone();
+        login_user.login_user = "root".to_string();
+        let mut login_pass = base.clone();
+        login_pass.login_pass = "secret".to_string();
+        let mut su_mode = base.clone();
+        su_mode.su_mode = "wrap".to_string();
+
+        let variants = [
+            ("char_delay_ms", char_delay),
+            ("timeout_ms", timeout),
+            ("retries", retries),
+            ("settle_ms", settle),
+            ("login_user", login_user),
+            ("login_pass", login_pass),
+            ("su_mode", su_mode),
+        ];
+        for (field, config) in variants {
+            assert_ne!(
+                config_key(&base),
+                config_key(&config),
+                "{field} change must force a new UART session"
+            );
+        }
+    }
+
+    #[test]
+    fn config_key_does_not_collide_on_string_delimiters() {
+        let first = UartConfig {
+            login_user: "a\".to_string()".to_string(),
+            ..UartConfig::default()
+        };
+        let second = UartConfig {
+            login_user: "a".to_string(),
+            ..UartConfig::default()
+        };
+        assert_ne!(config_key(&first), config_key(&second));
     }
 }

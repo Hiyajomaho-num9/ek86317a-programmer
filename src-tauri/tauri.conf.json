@@ -3,6 +3,20 @@
   "productName": "EK86317A Programmer",
   "version": "0.5.1",
   "identifier": "com.ek86317a.programmer",
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {
+      "vendor/ch347/windows/amd64/CH347DLLA64.dll": "CH347DLLA64.dll"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

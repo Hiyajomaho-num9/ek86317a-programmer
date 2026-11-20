@@ -1,6 +1,9 @@
-import { useAppContext } from '../../App';
+import { useLegacyFields } from '../../context/legacy';
+import { useOperations } from '../../context/OperationsContext';
+import { useRegisterValue } from '../../context/RegistersContext';
 import { formatHex } from '../../lib/voltage-calc';
 import type { VoltageOption, VoltageRegisterDef } from '../../lib/register-map';
+import { getDefaultRegisterValue } from '../../lib/register-map';
 
 interface VoltageRowProps {
   reg: VoltageRegisterDef;
@@ -8,10 +11,11 @@ interface VoltageRowProps {
 }
 
 function VoltageRow({ reg, options }: VoltageRowProps) {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
+  const { runExclusive } = useOperations();
 
   // Current register raw value from DAC state
-  const rawValue = ctx.getDacValue(reg.address) ?? 0;
+  const rawValue = useRegisterValue(reg.address) ?? getDefaultRegisterValue(ctx.chipModel, reg.address);
 
   // Extract the voltage-relevant portion of the value
   const voltageValue = rawValue & reg.valueMask;
@@ -19,7 +23,7 @@ function VoltageRow({ reg, options }: VoltageRowProps) {
   // Enable bit (if applicable) — may be in a separate register (enableAddress)
   const hasEnable = reg.hasEnable && reg.enableBit !== undefined;
   const enableAddr = reg.enableAddress ?? reg.address;
-  const enableRaw = reg.enableAddress ? (ctx.getDacValue(reg.enableAddress) ?? 0) : rawValue;
+  const enableRaw = useRegisterValue(enableAddr) ?? getDefaultRegisterValue(ctx.chipModel, enableAddr);
   const enableChecked = hasEnable ? ((enableRaw >> reg.enableBit!) & 1) === 1 : false;
 
   // Select bit (if applicable, e.g., VGL_LT_HT bit6=LT/HT)
@@ -60,7 +64,7 @@ function VoltageRow({ reg, options }: VoltageRowProps) {
     ctx.setDacValue(reg.address, newRaw);
   };
 
-  const handleRead = async () => {
+  const handleRead = () => runExclusive(`Read ${reg.name}`, async () => {
     try {
       const val = await ctx.readDacRegister(reg.address);
       ctx.addLog('info', `Read ${reg.name} (${formatHex(reg.address)}): ${formatHex(val)}`);
@@ -71,9 +75,9 @@ function VoltageRow({ reg, options }: VoltageRowProps) {
     } catch (e: unknown) {
       ctx.addLog('error', `Read ${reg.name} failed: ${e}`);
     }
-  };
+  });
 
-  const handleWrite = async () => {
+  const handleWrite = () => runExclusive(`Write ${reg.name}`, async () => {
     try {
       await ctx.writeDacRegister(reg.address, rawValue);
       ctx.addLog('success', `Write ${reg.name} (${formatHex(reg.address)}): ${formatHex(rawValue)}`);
@@ -84,7 +88,7 @@ function VoltageRow({ reg, options }: VoltageRowProps) {
     } catch (e: unknown) {
       ctx.addLog('error', `Write ${reg.name} failed: ${e}`);
     }
-  };
+  });
 
   const selectStyle = 'px-2 py-1 text-xs bg-gray-700 border border-gray-600 rounded text-gray-200 focus:border-blue-500 focus:outline-none';
   const btnSmall = 'px-2 py-1 text-xs rounded text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';

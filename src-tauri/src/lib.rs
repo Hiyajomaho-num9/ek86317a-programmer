@@ -2,17 +2,62 @@ pub mod bridges;
 pub mod error;
 pub mod pmu;
 
+use std::fs::File;
+use std::path::PathBuf;
+
 use pmu::commands::uart::UartState;
 use pmu::commands::DeviceState;
 
+/// Presence-detection engine built into this binary. Printed on startup so a log
+/// file always says which build produced it.
+const PROBE_ENGINE: &str = "floating-baseline-v2";
+
+/// `%LOCALAPPDATA%\EK86317A Programmer\ek86317a-programmer.log`
+///
+/// A release build has no console (`windows_subsystem = "windows"`), so without
+/// a log file the detection decisions are invisible to the user — and to anyone
+/// asked to explain a wrong detection.
+fn log_file_path() -> Option<PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TEMP").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("EK86317A Programmer");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("ek86317a-programmer.log"))
+}
+
+fn init_logging() {
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+
+    match log_file_path().and_then(|path| File::create(path).ok()) {
+        Some(file) => builder.target(env_logger::Target::Pipe(Box::new(file))),
+        None => builder.target(env_logger::Target::Stderr),
+    }
+    .init();
+
+    log::info!(
+        "EK86317A Programmer {} starting (probe-engine={})",
+        env!("CARGO_PKG_VERSION"),
+        PROBE_ENGINE
+    );
+    if let Some(path) = log_file_path() {
+        log::info!("log file: {}", path.display());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
+    init_logging();
+
+    let device_state = DeviceState::new();
+    let uart_state = UartState::new(&device_state);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(DeviceState::new())
-        .manage(UartState::new())
+        .manage(device_state)
+        .manage(uart_state)
         .invoke_handler(tauri::generate_handler![
             pmu::commands::device::scan_devices,
             pmu::commands::device::connect_device,

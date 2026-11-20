@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { useAppContext } from '../../App';
+import { useLegacyFields } from '../../context/legacy';
+import { useRegisterValue, useRegisterValues } from '../../context/RegistersContext';
 import VoltageRow from './VoltageRow';
 import Vcom1Complex from './Vcom1Complex';
 import {
@@ -16,15 +17,18 @@ import type { VoltageOption, VoltageRegisterDef } from '../../lib/register-map';
 import { decodeVcomMaxLimit, decodeVcomMinLimit } from '../../lib/voltage-calc';
 
 function VoltageTab() {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
   const avdd = ctx.getAvddVoltage();
+  const dacRegisters = useRegisterValues();
+  const vcomMin = useRegisterValue(REG_VCOM_MIN);
+  const vcomMax = useRegisterValue(REG_VCOM_MAX);
   const voltageRegisters = useMemo(
-    () => getVoltageRegisters(ctx.chipModel, ctx.dacRegisters),
-    [ctx.chipModel, ctx.dacRegisters],
+    () => getVoltageRegisters(ctx.chipModel, dacRegisters),
+    [ctx.chipModel, dacRegisters],
   );
 
-  const vcomMinRaw = ctx.getDacValue(REG_VCOM_MIN) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MIN);
-  const vcomMaxRaw = ctx.getDacValue(REG_VCOM_MAX) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MAX);
+  const vcomMinRaw = vcomMin ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MIN);
+  const vcomMaxRaw = vcomMax ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MAX);
   const vcomMinV = decodeVcomMinLimit(vcomMinRaw, avdd);
   const vcomMaxV = decodeVcomMaxLimit(vcomMaxRaw, avdd);
 

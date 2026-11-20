@@ -1,5 +1,6 @@
 pub mod chip;
 pub mod commands;
+pub mod detect;
 pub mod device;
 pub mod ek86317a;
 pub mod firmware;

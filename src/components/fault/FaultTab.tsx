@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useAppContext } from '../../App';
+import { useLegacyFields } from '../../context/legacy';
 import { getChipDisplayName } from '../../lib/chips';
 import { readFaultFlags } from '../../lib/tauri-commands';
+import { useOperations } from '../../context/OperationsContext';
 import type { FaultFlags } from '../../lib/tauri-commands';
 
 interface FaultBitDef {
@@ -21,9 +22,9 @@ const FAULT_BITS: FaultBitDef[] = [
 ];
 
 function FaultTab() {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
   const [faultData, setFaultData] = useState<FaultFlags | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { busy, runExclusive } = useOperations();
 
   if (ctx.chipCapabilities.supportsFault !== true) {
     return (
@@ -41,18 +42,15 @@ function FaultTab() {
     );
   }
 
-  const handleReadFault = async () => {
-    setLoading(true);
+  const handleReadFault = () => runExclusive('Reading fault flags...', async () => {
     try {
       const result = await readFaultFlags();
       setFaultData(result);
       ctx.addLog('info', `Read fault flags: 0x${result.raw.toString(16).toUpperCase().padStart(2, '0')}`);
     } catch (error: unknown) {
       ctx.addLog('error', `Read fault flags failed: ${error}`);
-    } finally {
-      setLoading(false);
     }
-  };
+  });
 
   const btnSmall = 'px-3 py-1.5 text-xs rounded text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
@@ -66,9 +64,9 @@ function FaultTab() {
           <button
             onClick={handleReadFault}
             className={`${btnSmall} bg-blue-600 hover:bg-blue-700`}
-            disabled={ctx.connected === false || loading}
+            disabled={!ctx.connected || busy !== null}
           >
-            {loading ? 'Reading...' : 'Read Fault'}
+            {busy ? 'Reading...' : 'Read Fault'}
           </button>
         </div>
 

@@ -247,7 +247,7 @@ impl Ek86317a {
     pub fn verify_all(
         &mut self,
         data: &[u8],
-    ) -> Result<(Vec<(u8, u8, u8)>, Vec<(u8, u8, u8)>), String> {
+    ) -> Result<crate::pmu::commands::BankMismatches, String> {
         // Verify DAC bank
         let dac = self.read_all_dac()?;
         let mut dac_mismatches = Vec::new();
@@ -292,21 +292,128 @@ impl Ek86317a {
     // ========================================================================
 
     /// Probe for PMIC on the I2C bus.
-    /// Uses a real register read instead of address-only writes.
     /// Returns (pmic_detected, vcom_detected).
+    ///
+    /// Presence is decided by [`crate::pmu::detect::device_responds`]: on a bus
+    /// that never reports NACK (CH341) a successful read is not evidence, only a
+    /// read that differs from the floating-bus level is.
     pub fn probe(&mut self) -> Result<(bool, bool), String> {
         // Bus recovery: free any slave holding SDA low from a previous interrupted transaction
         if let Err(e) = self.bus.bus_recovery() {
             log::warn!("Bus recovery failed (non-fatal): {}", e);
         }
 
-        let mut buf = [0u8; 1];
-        let pmic_ok = self
-            .bus
-            .write_read(PMIC_ADDR, &[REG_AVDD], &mut buf)
-            .is_ok();
+        // Select the DAC bank so the probe registers return real data: an
+        // unselected page can read back as a flat 0xFF, which the presence
+        // comparison would not be able to tell apart from an unloaded bus.
+        if let Err(e) = self.bus.write(PMIC_ADDR, &[REG_CONTROL, CTRL_READ_DAC]) {
+            log::debug!("DAC bank select before probe failed (ignored): {}", e);
+        }
+        thread::sleep(Duration::from_millis(T_RD_MTP_BLK_MS));
+
+        let pmic_ok = crate::pmu::detect::device_responds(
+            self.bus.as_mut(),
+            PMIC_ADDR,
+            &[REG_AVDD, REG_VCOM_MAX, REG_VCOM_MIN],
+        );
 
         // Do not auto-probe VCOM 0x74 here; it may be absent or disabled.
         Ok((pmic_ok, false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ek86317a, PMIC_ADDR};
+    use crate::bridges::I2cBus;
+
+    /// Bus double. With `reports_nack = false` it behaves like a CH341: every
+    /// transfer succeeds and an empty bus reads back the idle level (0xFF).
+    /// With `reports_nack = true` it behaves like FTDI/CH347: an absent slave
+    /// fails the read.
+    struct ProbeBus {
+        reports_nack: bool,
+        pmic_present: bool,
+        idle: u8,
+    }
+
+    impl I2cBus for ProbeBus {
+        fn write(&mut self, _addr: u8, _data: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn read(&mut self, _addr: u8, buf: &mut [u8]) -> Result<(), String> {
+            for byte in buf.iter_mut() {
+                *byte = self.idle;
+            }
+            Ok(())
+        }
+
+        fn write_read(
+            &mut self,
+            addr: u8,
+            _write_data: &[u8],
+            read_buf: &mut [u8],
+        ) -> Result<(), String> {
+            if self.reports_nack && !self.pmic_present {
+                return Err(format!("No ACK from slave 0x{:02X}", addr));
+            }
+            let value = if self.pmic_present && addr == PMIC_ADDR {
+                0x1C
+            } else {
+                self.idle
+            };
+            for byte in read_buf.iter_mut() {
+                *byte = value;
+            }
+            Ok(())
+        }
+
+        fn reports_nack(&self) -> bool {
+            self.reports_nack
+        }
+    }
+
+    #[test]
+    fn probe_rejects_an_empty_bus_even_when_every_read_succeeds() {
+        // The reported bug: on CH341 an unloaded bus answered every read with
+        // 0xFF and the PMU was reported as present.
+        let bus = Box::new(ProbeBus {
+            reports_nack: false,
+            pmic_present: false,
+            idle: 0xFF,
+        });
+        let mut pmu = Ek86317a::new(bus);
+
+        assert_eq!(pmu.probe().unwrap(), (false, false));
+    }
+
+    #[test]
+    fn probe_accepts_a_pmic_that_drives_the_bus() {
+        let bus = Box::new(ProbeBus {
+            reports_nack: false,
+            pmic_present: true,
+            idle: 0xFF,
+        });
+        let mut pmu = Ek86317a::new(bus);
+
+        assert_eq!(pmu.probe().unwrap(), (true, false));
+    }
+
+    #[test]
+    fn probe_keeps_nack_semantics_on_nack_reporting_buses() {
+        let absent = Box::new(ProbeBus {
+            reports_nack: true,
+            pmic_present: false,
+            idle: 0xFF,
+        });
+        assert_eq!(Ek86317a::new(absent).probe().unwrap(), (false, false));
+
+        let present = Box::new(ProbeBus {
+            reports_nack: true,
+            pmic_present: true,
+            idle: 0xFF,
+        });
+        assert_eq!(Ek86317a::new(present).probe().unwrap(), (true, false));
     }
 }

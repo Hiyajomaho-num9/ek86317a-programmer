@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useAppContext } from '../../App';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useLogContext } from '../../context/LogContext';
+import { useOperations } from '../../context/OperationsContext';
 import { base64ToBytes, uartTermPoll, uartTermSend, uartTermStart, uartTermStop } from '../../lib/uart';
 import type { UartConfig } from '../../lib/uart';
 import {
@@ -26,6 +27,10 @@ interface Props {
   config: UartConfig;
 }
 
+export interface UartTerminalHandle {
+  stop: () => Promise<void>;
+}
+
 /**
  * 内置交互终端。
  *
@@ -36,10 +41,15 @@ interface Props {
  * - **显示走 TermBuffer**，不是纯文本堆叠 —— `\b` / `\r` / `ESC[K` 要按终端规则处理，
  *   否则 Backspace 删不掉字、提示符会越叠越多。
  */
-function UartTerminal({ config }: Props) {
-  const ctx = useAppContext();
+const UartTerminal = forwardRef<UartTerminalHandle, Props>(function UartTerminal({ config }, ref) {
+  const { addLog } = useLogContext();
+  const { busy, runExclusive } = useOperations();
 
   const [running, setRunning] = useState(false);
+  const runningRef = useRef(false);
+  const generationRef = useRef(0);
+  const stopPromiseRef = useRef<Promise<void> | null>(null);
+  const mountedRef = useRef(true);
   const [view, setView] = useState<RenderedView>(EMPTY_VIEW);
   const [localEcho, setLocalEcho] = useState(false);
   const [stats, setStats] = useState({ up: 0, down: 0 });
@@ -73,43 +83,70 @@ function UartTerminal({ config }: Props) {
       setStats((s) => ({ ...s, up: s.up + data.length }));
       if (echoRef.current) append(data);
     } catch (error: unknown) {
-      ctx.addLog('error', `终端发送失败: ${error}`);
+      addLog('error', `终端发送失败: ${error}`);
     }
-  }, [append, ctx]);
+  }, [append, addLog]);
 
-  // 轮询设备输出
+  // One bounded poll at a time, outside the long-lived UI operation lock.
+  // Every IPC still uses the shared hardware FIFO, so Stop can run immediately
+  // after the current poll without waiting for the terminal session to end.
   useEffect(() => {
     if (!running) return;
+    const generation = ++generationRef.current;
     let cancelled = false;
 
+    const release = async () => {
+      ++generationRef.current;
+      runningRef.current = false;
+      try {
+        await uartTermStop();
+      } catch (error: unknown) {
+        if (mountedRef.current) addLog('error', `终端清理失败: ${error}`);
+      }
+      if (mountedRef.current) setRunning(false);
+    };
+
     const loop = async () => {
-      while (!cancelled) {
+      while (!cancelled && runningRef.current && generationRef.current === generation) {
         try {
           const b64 = await uartTermPoll(configRef.current, POLL_MS);
-          if (cancelled) break;
+          if (cancelled || generationRef.current !== generation || !mountedRef.current) break;
           if (b64 === '') {
             await sleep(25);
             continue;
           }
           const bytes = base64ToBytes(b64);
-          // stream: true —— 多字节字符被拆到两次轮询之间也不会乱码
           const text = decoderRef.current.decode(bytes, { stream: true });
           if (text !== '') {
             setStats((s) => ({ ...s, down: s.down + bytes.length }));
             append(text);
           }
         } catch (error: unknown) {
-          if (cancelled) break;
-          ctx.addLog('error', `终端读取中断: ${error}`);
-          setRunning(false);
+          if (!cancelled && generationRef.current === generation) {
+            if (mountedRef.current) addLog('error', `终端读取中断: ${error}`);
+            await release();
+          }
           break;
         }
       }
     };
 
     void loop();
-    return () => { cancelled = true; };
-  }, [running, append, ctx]);
+    return () => {
+      cancelled = true;
+      if (generationRef.current === generation) void release();
+    };
+  }, [running, append, addLog]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      ++generationRef.current;
+      runningRef.current = false;
+      void uartTermStop().catch(() => undefined);
+    };
+  }, []);
 
   // 自动滚到底（用户往上翻的时候不打扰）
   useEffect(() => {
@@ -118,30 +155,51 @@ function UartTerminal({ config }: Props) {
     if (atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [view]);
 
-  const handleStart = async () => {
+  const stop = useCallback(() => {
+    ++generationRef.current;
+    const wasRunning = runningRef.current;
+    runningRef.current = false;
+    if (mountedRef.current) setRunning(false);
+    if (stopPromiseRef.current) return stopPromiseRef.current;
+    const task = (async () => {
+      try {
+        await uartTermStop();
+        if (wasRunning && mountedRef.current) {
+          addLog('info', '终端已释放串口，I2C 命令恢复可用');
+        }
+      } catch (error: unknown) {
+        if (mountedRef.current) addLog('error', `停止终端失败: ${error}`);
+      }
+    })().finally(() => { stopPromiseRef.current = null; });
+    stopPromiseRef.current = task;
+    return task;
+  }, [addLog]);
+
+  useImperativeHandle(ref, () => ({ stop }), [stop]);
+
+  const handleStart = () => runExclusive('启动终端...', async () => {
     try {
       await uartTermStart(configRef.current);
       decoderRef.current = new TextDecoder('utf-8');
       termRef.current.reset();
       setView(EMPTY_VIEW);
+      runningRef.current = true;
       setRunning(true);
-      ctx.addLog('info', '终端已接管串口（I2C 命令暂停，停止终端后恢复）');
+      addLog('info', '终端已接管串口（I2C 命令暂停，停止终端后恢复）');
       await sleep(80);
       inputRef.current?.focus();
     } catch (error: unknown) {
-      ctx.addLog('error', `启动终端失败: ${error}`);
+      runningRef.current = false;
+      setRunning(false);
+      addLog('error', `启动终端失败: ${error}`);
     }
-  };
+  });
 
-  const handleStop = async () => {
-    setRunning(false);
-    try {
-      await uartTermStop();
-      ctx.addLog('info', '终端已释放串口，I2C 命令恢复可用');
-    } catch (error: unknown) {
-      ctx.addLog('error', `停止终端失败: ${error}`);
-    }
-  };
+  const handleStop = () => { void stop(); };
+
+  useEffect(() => {
+    if (runningRef.current) void stop();
+  }, [config, stop]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const key = event.key;
@@ -155,7 +213,7 @@ function UartTerminal({ config }: Props) {
     if (key === 'ArrowLeft') { event.preventDefault(); void send('\u001b[D'); return; }
     if (event.ctrlKey) {
       const lower = key.toLowerCase();
-      if (lower === 'c') { event.preventDefault(); void send('\u0003'); ctx.addLog('warn', '已发送 Ctrl-C'); return; }
+      if (lower === 'c') { event.preventDefault(); void send('\u0003'); addLog('warn', '已发送 Ctrl-C'); return; }
       if (lower === 'd') { event.preventDefault(); void send('\u0004'); return; }
       if (lower === 'l') { event.preventDefault(); void send('\u000c'); termRef.current.reset(); setView(EMPTY_VIEW); return; }
       if (lower === 'a') { event.preventDefault(); void send('\u0001'); return; }
@@ -176,7 +234,7 @@ function UartTerminal({ config }: Props) {
     event.preventDefault();
     const text = event.clipboardData.getData('text');
     if (text === '') return;
-    ctx.addLog('info', `粘贴 ${text.length} 字符，分片发送中…`);
+    addLog('info', `粘贴 ${text.length} 字符，分片发送中…`);
     for (let i = 0; i < text.length; i += PASTE_CHUNK) {
       await uartTermSend(configRef.current, text.slice(i, i + PASTE_CHUNK));
       await sleep(PASTE_DELAY_MS);
@@ -342,13 +400,13 @@ function UartTerminal({ config }: Props) {
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          disabled={!running}
+          disabled={!running || busy !== null}
           autoComplete="off"
           spellCheck={false}
         />
       </div>
     </div>
   );
-}
+});
 
 export default UartTerminal;

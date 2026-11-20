@@ -102,8 +102,13 @@ pub fn decode_avdd(value: u8, mode_value: Option<u8>) -> f64 {
     }
 }
 
+/// Like EK86317A, VBK1 uses four non-linear segments selected by bits [5:4].
+/// Only LP6281 uses the linear 1.8V + code * 0.05V mapping.
 pub fn decode_vbk1(value: u8) -> f64 {
-    1.8 + (value & 0x1F) as f64 * 0.05
+    const VBK1_BASE: [f64; 4] = [1.80, 2.60, 0.80, 1.60];
+    let segment = ((value >> 4) & 0x03) as usize;
+    let offset = (value & 0x0F) as f64;
+    VBK1_BASE[segment] + offset * 0.05
 }
 
 pub fn decode_havdd(value: u8, avdd: f64) -> f64 {
@@ -211,5 +216,42 @@ pub fn decode_register_voltage(
         REG_VCOM_MIN => Some(decode_vcom_min_limit(value, avdd)),
         REG_VCOM2DAC => Some(decode_vcom2dac(value, vcom_min, vcom_max)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_register_voltage, decode_vbk1, REG_VBK1};
+
+    #[test]
+    fn vbk1_decodes_all_segment_boundaries() {
+        let cases = [
+            (0x00, 1.80),
+            (0x0F, 2.55),
+            (0x10, 2.60),
+            (0x1F, 3.35),
+            (0x20, 0.80),
+            (0x2F, 1.55),
+            (0x30, 1.60),
+            (0x3F, 2.35),
+        ];
+
+        for (value, expected) in cases {
+            let actual = decode_vbk1(value);
+            assert!(
+                (actual - expected).abs() < 1e-10,
+                "VBK1 0x{value:02X}: expected {expected}, got {actual}"
+            );
+            assert_eq!(
+                decode_register_voltage(REG_VBK1, value, None, None, None, None),
+                Some(actual)
+            );
+        }
+    }
+
+    #[test]
+    fn vbk1_ignores_bits_outside_the_six_bit_dac_code() {
+        assert_eq!(decode_vbk1(0xC0), decode_vbk1(0x00));
+        assert_eq!(decode_vbk1(0xFF), decode_vbk1(0x3F));
     }
 }

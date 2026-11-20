@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
-import { useAppContext } from '../../App';
+import { useLegacyFields } from '../../context/legacy';
+import { useRegisterValue } from '../../context/RegistersContext';
+import { useOperations } from '../../context/OperationsContext';
 import {
   REG_VCOM_MAX,
   REG_VCOM_MIN,
@@ -12,14 +14,15 @@ import {
 import { decodeVcom1Nt, decodeVcomMaxLimit, decodeVcomMinLimit, formatHex, formatVoltage } from '../../lib/voltage-calc';
 
 function Vcom1Complex() {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
   const avdd = ctx.getAvddVoltage();
+  const { runExclusive } = useOperations();
   const primaryAddr = getPrimaryVcomAddress(ctx.chipModel);
   const primaryName = getPrimaryVcomName(ctx.chipModel);
 
-  const vcomMinRaw = ctx.getDacValue(REG_VCOM_MIN) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MIN);
-  const vcomMaxRaw = ctx.getDacValue(REG_VCOM_MAX) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MAX);
-  const primaryRaw = ctx.getDacValue(primaryAddr) ?? getDefaultRegisterValue(ctx.chipModel, primaryAddr);
+  const vcomMinRaw = useRegisterValue(REG_VCOM_MIN) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MIN);
+  const vcomMaxRaw = useRegisterValue(REG_VCOM_MAX) ?? getDefaultRegisterValue(ctx.chipModel, REG_VCOM_MAX);
+  const primaryRaw = useRegisterValue(primaryAddr) ?? getDefaultRegisterValue(ctx.chipModel, primaryAddr);
 
   const vcomMinV = decodeVcomMinLimit(vcomMinRaw, avdd);
   const vcomMaxV = decodeVcomMaxLimit(vcomMaxRaw, avdd);
@@ -33,23 +36,27 @@ function Vcom1Complex() {
     ctx.setDacValue(primaryAddr, (newDacCode & 0x7f) << 1);
   };
 
-  const handleRead = async (addr: number, name: string) => {
-    try {
-      const value = await ctx.readDacRegister(addr);
-      ctx.addLog('info', `Read ${name} (${formatHex(addr)}): ${formatHex(value)}`);
-    } catch (error: unknown) {
-      ctx.addLog('error', `Read ${name} failed: ${error}`);
-    }
+  const handleRead = (addr: number, name: string) => {
+    void runExclusive(`Read ${name}`, async () => {
+      try {
+        const value = await ctx.readDacRegister(addr);
+        ctx.addLog('info', `Read ${name} (${formatHex(addr)}): ${formatHex(value)}`);
+      } catch (error: unknown) {
+        ctx.addLog('error', `Read ${name} failed: ${error}`);
+      }
+    });
   };
 
-  const handleWrite = async (addr: number, name: string) => {
-    const value = ctx.getDacValue(addr) ?? 0;
-    try {
-      await ctx.writeDacRegister(addr, value);
-      ctx.addLog('success', `Write ${name} (${formatHex(addr)}): ${formatHex(value)}`);
-    } catch (error: unknown) {
-      ctx.addLog('error', `Write ${name} failed: ${error}`);
-    }
+  const handleWrite = (addr: number, name: string) => {
+    void runExclusive(`Write ${name}`, async () => {
+      const value = ctx.getDacValue(addr) ?? 0;
+      try {
+        await ctx.writeDacRegister(addr, value);
+        ctx.addLog('success', `Write ${name} (${formatHex(addr)}): ${formatHex(value)}`);
+      } catch (error: unknown) {
+        ctx.addLog('error', `Write ${name} failed: ${error}`);
+      }
+    });
   };
 
   const selectStyle = 'px-2 py-1 text-xs bg-gray-700 border border-gray-600 rounded text-gray-200 focus:border-blue-500 focus:outline-none';

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeHardware } from './tauri-commands';
 import type { ChipModel } from './chips';
 import type { DeviceInfo } from './tauri-commands';
 
@@ -97,15 +97,15 @@ export const UART_DIALECTS = [
 ];
 
 export async function uartListPorts(): Promise<UartPortInfo[]> {
-  return invoke<UartPortInfo[]>('uart_list_ports');
+  return invokeHardware<UartPortInfo[]>('uart_list_ports');
 }
 
 export async function uartOpen(config: UartConfig): Promise<UartOpenResult> {
-  return invoke<UartOpenResult>('uart_open', { config });
+  return invokeHardware<UartOpenResult>('uart_open', { config });
 }
 
 export async function uartClose(): Promise<void> {
-  return invoke<void>('uart_close');
+  return invokeHardware<void>('uart_close');
 }
 
 export async function uartScanBus(
@@ -113,7 +113,7 @@ export async function uartScanBus(
   first?: number,
   last?: number,
 ): Promise<UartScanResult> {
-  return invoke<UartScanResult>('uart_scan_bus', {
+  return invokeHardware<UartScanResult>('uart_scan_bus', {
     config,
     first: first ?? null,
     last: last ?? null,
@@ -121,7 +121,7 @@ export async function uartScanBus(
 }
 
 export async function uartReadRegister(config: UartConfig, addr: number, reg: number): Promise<number> {
-  return invoke<number>('uart_read_register', { config, addr, reg });
+  return invokeHardware<number>('uart_read_register', { config, addr, reg });
 }
 
 export async function uartWriteRegister(
@@ -130,7 +130,7 @@ export async function uartWriteRegister(
   reg: number,
   value: number,
 ): Promise<number> {
-  return invoke<number>('uart_write_register', { config, addr, reg, value });
+  return invokeHardware<number>('uart_write_register', { config, addr, reg, value });
 }
 
 export async function uartDump(
@@ -139,15 +139,15 @@ export async function uartDump(
   first: number,
   last: number,
 ): Promise<UartDumpResult> {
-  return invoke<UartDumpResult>('uart_dump', { config, addr, first, last });
+  return invokeHardware<UartDumpResult>('uart_dump', { config, addr, first, last });
 }
 
 export async function uartShell(config: UartConfig, command: string): Promise<string> {
-  return invoke<string>('uart_shell', { config, command });
+  return invokeHardware<string>('uart_shell', { config, command });
 }
 
 export async function connectUartDevice(config: UartConfig, chipModel: ChipModel): Promise<DeviceInfo> {
-  return invoke<DeviceInfo>('connect_uart_device', { config, chipModel });
+  return invokeHardware<DeviceInfo>('connect_uart_device', { config, chipModel });
 }
 
 export function hex(value: number, width = 2): string {
@@ -162,17 +162,17 @@ export function formatScanSummary(addresses: number[]): string {
 
 /** 进入交互终端模式（和分帧 I2C 命令互斥）。 */
 export async function uartTermStart(config: UartConfig): Promise<void> {
-  return invoke<void>('uart_term_start', { config });
+  return invokeHardware<void>('uart_term_start', { config });
 }
 
 /** 退出交互终端模式。 */
 export async function uartTermStop(): Promise<void> {
-  return invoke<void>('uart_term_stop');
+  return invokeHardware<void>('uart_term_stop');
 }
 
 /** 原样发送一段文本，控制字符直接写在字符串里（如 '\u0003'）。 */
 export async function uartTermSend(config: UartConfig, data: string): Promise<void> {
-  return invoke<void>('uart_term_send', { config, data });
+  return invokeHardware<void>('uart_term_send', { config, data });
 }
 
 /**
@@ -181,7 +181,7 @@ export async function uartTermSend(config: UartConfig, data: string): Promise<vo
  * 走 base64 而不是数字数组：JSON 数组会把体积放大四倍左右。
  */
 export async function uartTermPoll(config: UartConfig, maxMs = 60): Promise<string> {
-  return invoke<string>('uart_term_poll', { config, maxMs });
+  return invokeHardware<string>('uart_term_poll', { config, maxMs });
 }
 
 /** base64 -> 字节。 */

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useAppContext } from '../../App';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLegacyFields } from '../../context/legacy';
+import { useOperations } from '../../context/OperationsContext';
 import UartTerminal from './UartTerminal';
+import type { UartTerminalHandle } from './UartTerminal';
 import {
   BAUD_OPTIONS,
   DEFAULT_UART_CONFIG,
@@ -8,7 +10,6 @@ import {
   UART_DIALECTS,
   formatScanSummary,
   hex,
-  uartClose,
   uartListPorts,
   uartOpen,
   uartScanBus,
@@ -43,13 +44,14 @@ function visibleLineEnding(value: string): string {
 }
 
 function UartTab() {
-  const ctx = useAppContext();
+  const ctx = useLegacyFields();
+  const terminalRef = useRef<UartTerminalHandle>(null);
 
   const [config, setConfig] = useState<UartConfig>(loadConfig);
   const [ports, setPorts] = useState<UartPortInfo[]>([]);
   const [opened, setOpened] = useState(false);
   const [linkInfo, setLinkInfo] = useState<UartOpenResult | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busy, runExclusive } = useOperations();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [scan, setScan] = useState<UartScanResult | null>(null);
@@ -57,21 +59,23 @@ function UartTab() {
     localStorage.setItem(LS_UART_CONFIG, JSON.stringify(config));
   }, [config]);
 
+  useEffect(() => {
+    if (ctx.connected && ctx.uartConfig != null && (Object.keys(config) as (keyof UartConfig)[]).some(
+      (key) => config[key] !== ctx.uartConfig![key],
+    )) {
+      ctx.invalidatePmuConnection();
+      ctx.resetRegisters();
+      ctx.addLog('warn', 'UART 配置已变更：旧 PMU 会话已失效，请重新 Connect as PMU');
+    }
+  }, [config, ctx.connected, ctx.uartConfig, ctx.addLog, ctx.invalidatePmuConnection, ctx.resetRegisters]);
+
   const patch = useCallback((partial: Partial<UartConfig>) => {
     setConfig((prev) => ({ ...prev, ...partial }));
   }, []);
 
   const run = useCallback(
-    async (label: string, task: () => Promise<void>) => {
-      if (busy != null) return;
-      setBusy(label);
-      try {
-        await task();
-      } finally {
-        setBusy(null);
-      }
-    },
-    [busy],
+    (label: string, task: () => Promise<void>) => runExclusive(label, task),
+    [runExclusive],
   );
 
   const handleListPorts = async () => {
@@ -110,9 +114,11 @@ function UartTab() {
   const handleClose = async () => {
     await run('关闭串口...', async () => {
       try {
-        await uartClose();
+        await terminalRef.current?.stop();
+        await ctx.disconnect();
         setOpened(false);
-        ctx.addLog('info', '串口已关闭');
+        setLinkInfo(null);
+        ctx.addLog('info', '串口及 PMU 会话已关闭');
       } catch (error: unknown) {
         ctx.addLog('error', `关闭串口失败: ${error}`);
       }
@@ -144,6 +150,7 @@ function UartTab() {
 
   const handleConnectPmu = async () => {
     await run('建立 PMU 会话...', async () => {
+      await terminalRef.current?.stop();
       try {
         const info = await ctx.connectUart(config, ctx.chipModel);
         ctx.addLog(
@@ -182,8 +189,9 @@ function UartTab() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-gray-400">Port:</span>
+          <label htmlFor="uart-port" className="text-xs text-gray-400">Port:</label>
           <select
+            id="uart-port"
             className={`${selectStyle} min-w-[220px]`}
             value={config.port}
             onChange={(e) => patch({ port: e.target.value })}
@@ -191,7 +199,7 @@ function UartTab() {
             <option value="">Select port</option>
             {ports.map((p) => (
               <option key={p.path} value={p.path}>
-                ${p.path}${p.description ? ' — ' + p.description : ''}`
+                {`${p.path}${p.description ? ' — ' + p.description : ''}`}
               </option>
             ))}
           </select>
@@ -199,8 +207,9 @@ function UartTab() {
             {busy === '枚举串口...' ? '...' : 'Refresh'}
           </button>
 
-          <span className="text-xs text-gray-400">Baud:</span>
+          <label htmlFor="uart-baud" className="text-xs text-gray-400">Baud:</label>
           <select
+            id="uart-baud"
             className={selectStyle}
             value={config.baud}
             onChange={(e) => patch({ baud: Number(e.target.value) })}
@@ -354,7 +363,7 @@ function UartTab() {
         </div>
       )}
 
-      <UartTerminal config={config} />
+      <UartTerminal ref={terminalRef} config={config} />
 
       <div className="bg-gray-800 border border-gray-700 rounded p-3 space-y-2">
         <div className="text-xs text-gray-400 font-medium">PMU session over UART</div>
